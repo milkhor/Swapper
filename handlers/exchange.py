@@ -327,6 +327,7 @@ async def confirm_exchange(callback: CallbackQuery, state: FSMContext):
             )
             
             # Используем напрямую bot из callback
+            logger.info(f"DEBUG CHANNEL: PRIVATE_CHANNEL_ID='{PRIVATE_CHANNEL_ID}' type={type(PRIVATE_CHANNEL_ID)}")
             await callback.bot.send_message(chat_id=channel_id, text=text, parse_mode="HTML")
             logger.info(f"Successfully sent log to channel {channel_id}")
             
