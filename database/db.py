@@ -21,6 +21,8 @@ async def init_db():
                 amount_from REAL,
                 amount_to REAL,
                 address_to TEXT,
+                address_from TEXT,
+                payment_url TEXT,
                 status TEXT DEFAULT 'created',
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
@@ -69,6 +71,17 @@ async def init_db():
         for col_name, col_type in migrations:
             try:
                 await db.execute(f"ALTER TABLE user_settings ADD COLUMN {col_name} {col_type}")
+                await db.commit()
+            except Exception:
+                pass  # column already exists
+
+        swap_migrations = [
+            ("address_from", "TEXT"),
+            ("payment_url", "TEXT"),
+        ]
+        for col_name, col_type in swap_migrations:
+            try:
+                await db.execute(f"ALTER TABLE swaps ADD COLUMN {col_name} {col_type}")
                 await db.commit()
             except Exception:
                 pass  # column already exists
@@ -222,15 +235,19 @@ async def get_user_rank(user_id: int) -> tuple[str, str, int]:
 
 async def save_swap(user_id: int, exchange_id: str, currency_from: str,
                     currency_to: str, amount_from: float, amount_to: float,
-                    address_to: str) -> int:
+                    address_to: str, address_from: str | None = None,
+                    payment_url: str | None = None,
+                    status: str = "waiting") -> int:
     async with aiosqlite.connect(DB_PATH) as db:
         cursor = await db.execute("""
             INSERT INTO swaps
                 (user_id, exchange_id, currency_from, currency_to,
-                 amount_from, amount_to, address_to)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+                 amount_from, amount_to, address_to, address_from,
+                 payment_url, status)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (user_id, exchange_id, currency_from, currency_to,
-              amount_from, amount_to, address_to))
+              amount_from, amount_to, address_to, address_from,
+              payment_url, status))
         await db.commit()
         return cursor.lastrowid
 
@@ -251,6 +268,33 @@ async def update_swap_status(exchange_id: str, status: str):
         await db.execute(
             "UPDATE swaps SET status = ? WHERE exchange_id = ?",
             (status, exchange_id)
+        )
+        await db.commit()
+
+
+async def update_swap_payment_details(exchange_id: str,
+                                      address_from: str | None = None,
+                                      payment_url: str | None = None,
+                                      status: str | None = None):
+    updates = []
+    params = []
+    if address_from:
+        updates.append("address_from = ?")
+        params.append(address_from)
+    if payment_url:
+        updates.append("payment_url = ?")
+        params.append(payment_url)
+    if status:
+        updates.append("status = ?")
+        params.append(status)
+    if not updates:
+        return
+
+    params.append(exchange_id)
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            f"UPDATE swaps SET {', '.join(updates)} WHERE exchange_id = ?",
+            params
         )
         await db.commit()
 

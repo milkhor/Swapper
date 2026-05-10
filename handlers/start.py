@@ -60,6 +60,17 @@ async def callback_back(callback: CallbackQuery, state: FSMContext):
     )
 
 
+@router.callback_query(F.data == "action_menu")
+async def callback_menu(callback: CallbackQuery, state: FSMContext):
+    await callback.answer()
+    await state.clear()
+    lang = await get_user_lang(callback.from_user.id)
+    await callback.message.answer(
+        text=t(lang, "welcome"),
+        reply_markup=main_menu(lang)
+    )
+
+
 @router.callback_query(F.data == "action_language")
 async def callback_language(callback: CallbackQuery):
     await callback.answer()
