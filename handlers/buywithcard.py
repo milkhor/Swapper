@@ -1,30 +1,26 @@
 from aiogram import Router, F
-from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import Message, CallbackQuery
 from aiogram.fsm.context import FSMContext
-from aiogram.exceptions import TelegramBadRequest
-from aiogram.filters import Command
 
 from config import PRIVATE_CHANNEL_ID
 from states import ExchangeStates
 from services import simpleswap
-from services.currencies import get_fiat_currencies, get_crypto_currencies, get_currency, get_min_amount
+from services.address_validation import validate_wallet_address
+from services.amount_limits import format_limit_amount, get_pair_limits
+from services.currencies import get_currency
+from services.order_details import format_payment_details
 from services.limiter import limiter
 from database.db import save_swap, is_user_blocked
 from handlers.aml import check_aml
 from keyboards.inline import (
     back_to_menu, cancel_keyboard, fiat_confirm_keyboard,
-    fiat_keyboard, crypto_to_keyboard
+    fiat_keyboard, crypto_to_keyboard, payment_details_keyboard
 )
 
 import logging
 
 logger = logging.getLogger(__name__)
 router = Router()
-
-ADDRESS_MIN_LENGTH = {
-    "btc": 25, "eth": 42, "usdt": 42,
-    "sol": 32, "bnb": 42, "trx": 34,
-}
 
 @router.callback_query(F.data == "action_fiat")
 async def start_fiat(callback: CallbackQuery, state: FSMContext):
@@ -98,12 +94,25 @@ async def choose_crypto_for_fiat(callback: CallbackQuery, state: FSMContext):
         label_to=currency["label"]
     )
     await state.set_state(ExchangeStates.waiting_amount)
-    min_amount = await get_min_amount(data["currency_from"], data["network_from"])
+    data = await state.get_data()
+    limits = await get_pair_limits(
+        data["currency_from"],
+        data["network_from"],
+        data["currency_to"],
+        data["network_to"],
+    )
+    await state.update_data(
+        min_amount=limits["min"],
+        max_amount=limits["max"],
+        min_amount_source=limits["source"],
+    )
+    min_amount = format_limit_amount(limits["min"])
+    min_label = "Current minimum" if limits["source"] == "api" else "Configured minimum"
 
     await callback.message.edit_text(
         f"✅ Receiving: <b>{currency['label']}</b>\n\n"
         f"Enter amount in <b>{data['label_from']}</b>:\n"
-        f"<i>Minimum: {min_amount} {data['currency_from'].upper()}</i>\n\n"
+        f"<i>{min_label}: {min_amount} {data['currency_from'].upper()}</i>\n\n"
         f"<i>Type /cancel to abort</i>",
         reply_markup=cancel_keyboard()
     )
@@ -126,10 +135,28 @@ async def enter_fiat_amount(message: Message, state: FSMContext):
         )
         return
 
-    min_amount = await get_min_amount(data["currency_from"], data["network_from"])
+    limits = await get_pair_limits(
+        data["currency_from"],
+        data["network_from"],
+        data["currency_to"],
+        data["network_to"],
+    )
+    min_amount = limits["min"] or 0.0
+    max_amount = limits["max"]
+    min_label = "Current minimum" if limits["source"] == "api" else "Configured minimum"
     if amount < min_amount:
         await message.answer(
-            f"⚠️ Minimum amount: <b>{min_amount} {data['currency_from'].upper()}</b>\n\n"
+            f"⚠️ {min_label}: "
+            f"<b>{format_limit_amount(min_amount)} {data['currency_from'].upper()}</b>\n\n"
+            f"<i>Type /cancel to abort</i>",
+            reply_markup=cancel_keyboard()
+        )
+        return
+
+    if max_amount is not None and amount > max_amount:
+        await message.answer(
+            f"⚠️ Maximum amount: "
+            f"<b>{format_limit_amount(max_amount)} {data['currency_from'].upper()}</b>\n\n"
             f"<i>Type /cancel to abort</i>",
             reply_markup=cancel_keyboard()
         )
@@ -147,15 +174,25 @@ async def enter_fiat_amount(message: Message, state: FSMContext):
     )
 
     if not estimated_resp:
+        limit_note = (
+            f"Current minimum for this pair: "
+            f"<b>{format_limit_amount(min_amount)} {data['currency_from'].upper()}</b>\n\n"
+            if limits["source"] == "api"
+            else "Live minimum for this pair is unavailable right now.\n\n"
+        )
         await msg.edit_text(
             f"❌ Could not get a quote.\n\n"
-            f"Minimum: <b>{min_amount} {data['currency_from'].upper()}</b>\n"
-            f"Try a higher amount.\n<i>Type /cancel to abort</i>",
+            f"{limit_note}"
+            f"The pair may be temporarily unavailable, or the quote provider "
+            f"returned an error.\n<i>Type /cancel to abort</i>",
             reply_markup=cancel_keyboard()
         )
         return
 
-    await state.update_data(amount_to=estimated_resp["estimatedAmountTo"])
+    await state.update_data(
+        amount_to=estimated_resp["estimatedAmountTo"],
+        rate_id=estimated_resp.get("rateId"),
+    )
     await state.set_state(ExchangeStates.waiting_address)
 
     await msg.edit_text(
@@ -176,12 +213,16 @@ async def enter_fiat_address(message: Message, state: FSMContext):
 
     address = message.text.strip()
     currency_to = data.get("currency_to", "")
-    min_len = ADDRESS_MIN_LENGTH.get(currency_to, 10)
 
-    if len(address) < min_len:
+    is_valid, error = await validate_wallet_address(
+        address=address,
+        ticker=currency_to,
+        network=data.get("network_to", ""),
+        label=data.get("label_to", currency_to.upper()),
+    )
+    if not is_valid:
         await message.answer(
-            f"⚠️ Address too short. Minimum {min_len} characters.\n"
-            f"<i>Type /cancel to abort</i>",
+            f"{error}\n\n<i>Type /cancel to abort</i>",
             reply_markup=cancel_keyboard()
         )
         return
@@ -214,7 +255,8 @@ async def confirm_fiat_exchange(callback: CallbackQuery, state: FSMContext):
         ticker_to=data["currency_to"],
         network_to=data["network_to"],
         amount=str(data["amount"]),
-        address_to=data["address_to"]
+        address_to=data["address_to"],
+        rate_id=data.get("rate_id")
     )
 
     if not result:
@@ -224,6 +266,8 @@ async def confirm_fiat_exchange(callback: CallbackQuery, state: FSMContext):
 
     exchange_id = result.get("id") or result.get("exchangeId")
     redirect_url = result.get("redirectUrl") or result.get("paymentUrl") or result.get("redirect_url")
+    address_from = result.get("addressFrom") or result.get("address_from")
+    status = result.get("status") or "waiting"
 
     await save_swap(
         user_id=callback.from_user.id,
@@ -232,7 +276,10 @@ async def confirm_fiat_exchange(callback: CallbackQuery, state: FSMContext):
         currency_to=f"{data['currency_to']}_{data['network_to']}",
         amount_from=data["amount"],
         amount_to=data["amount_to"],
-        address_to=data["address_to"]
+        address_to=data["address_to"],
+        address_from=address_from,
+        payment_url=redirect_url,
+        status=status,
     )
     
     # Блок отправки в канал
@@ -259,21 +306,22 @@ async def confirm_fiat_exchange(callback: CallbackQuery, state: FSMContext):
     limiter.record(callback.from_user.id)
     await state.clear()
 
-    if redirect_url:
-        pay_kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="💳 Pay now", url=redirect_url)],
-            [InlineKeyboardButton(text="⬅️ Main menu", callback_data="action_back")],
-        ])
-        await callback.message.edit_text(
-            f"✅ <b>Order created!</b>\n\nID: <code>{exchange_id}</code>\n"
-            f"Click below to pay with card:",
-            reply_markup=pay_kb
-        )
-    else:
-        await callback.message.edit_text(
-            f"✅ <b>Order created!</b>\nID: <code>{exchange_id}</code>", 
-            reply_markup=back_to_menu()
-        )
+    swap_details = {
+        "exchange_id": exchange_id,
+        "status": status,
+        "currency_from": f"{data['currency_from']}_{data['network_from']}",
+        "currency_to": f"{data['currency_to']}_{data['network_to']}",
+        "amount_from": data["amount"],
+        "amount_to": data["amount_to"],
+        "address_to": data["address_to"],
+        "address_from": address_from,
+        "payment_url": redirect_url,
+    }
+
+    await callback.message.edit_text(
+        format_payment_details(swap_details),
+        reply_markup=payment_details_keyboard(exchange_id, redirect_url)
+    )
 
 
 @router.callback_query(ExchangeStates.confirm, F.data == "fiat_confirm_no")

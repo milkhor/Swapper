@@ -1,10 +1,21 @@
 from aiogram import Router, F
 from aiogram.types import Message
 from aiogram.filters import Command
+from html import escape
 
 from services.simpleswap import get_exchange
-from database.db import get_user_swaps, update_swap_status, get_swap_by_exchange_id, get_user_lang
-from keyboards.inline import back_to_menu
+from database.db import (
+    get_user_swaps,
+    update_swap_payment_details,
+    get_swap_by_exchange_id,
+)
+from keyboards.inline import active_orders_keyboard, back_to_menu, payment_details_keyboard
+from services.order_details import (
+    extract_payment_details,
+    format_history_payment_line,
+    format_payment_details,
+    is_payment_active,
+)
 
 import logging
 
@@ -12,6 +23,7 @@ logger = logging.getLogger(__name__)
 router = Router()
 
 STATUS_EMOJI = {
+    "created":    "⏳",
     "waiting":    "⏳",
     "confirming": "🔄",
     "exchanging": "💱",
@@ -36,30 +48,49 @@ async def cmd_status(message: Message):
         return
 
     status = result.get("status", "unknown")
-    emoji = STATUS_EMOJI.get(status, "❓")
+    address_from, payment_url = extract_payment_details(result)
 
-    await update_swap_status(exchange_id, status)
+    await update_swap_payment_details(
+        exchange_id,
+        address_from=address_from,
+        payment_url=payment_url,
+        status=status,
+    )
 
-    address_from = result.get("addressFrom") or result.get("address_from", "—")
-    amount_from = result.get("amountFrom") or result.get("amount_from", "—")
-    amount_to = result.get("amountTo") or result.get("amount_to", "—")
-    ticker_from = result.get("tickerFrom") or result.get("currency_from", "—")
-    ticker_to = result.get("tickerTo") or result.get("currency_to", "—")
+    swap = await get_swap_by_exchange_id(exchange_id)
+    if not swap:
+        ticker_from = result.get("tickerFrom") or result.get("currency_from", "—")
+        ticker_to = result.get("tickerTo") or result.get("currency_to", "—")
+        network_from = result.get("networkFrom") or result.get("network_from")
+        network_to = result.get("networkTo") or result.get("network_to")
+        currency_from = f"{ticker_from}_{network_from}" if network_from else ticker_from
+        currency_to = f"{ticker_to}_{network_to}" if network_to else ticker_to
+        swap = {
+            "exchange_id": exchange_id,
+            "status": status,
+            "currency_from": currency_from,
+            "currency_to": currency_to,
+            "amount_from": result.get("amountFrom") or result.get("amount_from", "—"),
+            "amount_to": result.get("amountTo") or result.get("amount_to", "—"),
+            "address_to": result.get("addressTo") or result.get("address_to"),
+            "address_from": address_from,
+            "payment_url": payment_url,
+        }
+
+    keyboard = (
+        payment_details_keyboard(exchange_id, swap.get("payment_url"))
+        if swap.get("user_id") == message.from_user.id and is_payment_active(swap.get("status"))
+        else back_to_menu()
+    )
 
     await message.answer(
-        f"{emoji} <b>Exchange Status</b>\n\n"
-        f"ID: <code>{exchange_id}</code>\n"
-        f"Status: <b>{status}</b>\n\n"
-        f"You send: <b>{amount_from} {ticker_from.upper()}</b>\n"
-        f"You receive: <b>{amount_to} {ticker_to.upper()}</b>\n\n"
-        f"Send to address:\n<code>{address_from}</code>",
-        reply_markup=back_to_menu()
+        format_payment_details(swap),
+        reply_markup=keyboard
     )
     
 @router.message(Command("myorder"))
 async def cmd_myorder(message: Message):
     args = message.text.split()
-    lang = await get_user_lang(message.from_user.id)
     
     if len(args) < 2:
         return await message.answer("Usage: /myorder ID_HERE")
@@ -69,14 +100,15 @@ async def cmd_myorder(message: Message):
     
     if not swap:
         return await message.answer("Order not found.")
+    if swap.get("user_id") != message.from_user.id:
+        return await message.answer("Order not found.")
     
-    text = (
-        f"📋 <b>Order {exchange_id}</b>\n"
-        f"Status: <code>{swap['status']}</code>\n"
-        f"Pair: {swap['currency_from'].upper()} ➡️ {swap['currency_to'].upper()}\n"
-        f"Amount: {swap['amount_from']} ➡️ {swap['amount_to']}"
+    keyboard = (
+        payment_details_keyboard(exchange_id, swap.get("payment_url"))
+        if is_payment_active(swap.get("status"))
+        else back_to_menu()
     )
-    await message.answer(text)
+    await message.answer(format_payment_details(swap), reply_markup=keyboard)
 
 
 @router.message(Command("history"))
@@ -94,11 +126,17 @@ async def cmd_history(message: Message):
     for swap in swaps:
         status = swap.get("status", "unknown")
         emoji = STATUS_EMOJI.get(status, "❓")
+        payment_line = format_history_payment_line(swap)
+        destination = ""
+        if payment_line and swap.get("address_to"):
+            destination = f"   Destination: <code>{escape(str(swap['address_to']))}</code>\n"
         text += (
             f"{emoji} <code>{swap['exchange_id']}</code>\n"
             f"   {swap['amount_from']} {swap['currency_from'].upper()} → "
             f"{swap['currency_to'].upper()}\n"
+            f"   {payment_line}"
+            f"{destination}"
             f"   /status_{swap['exchange_id']}\n\n"
         )
 
-    await message.answer(text, reply_markup=back_to_menu())
+    await message.answer(text, reply_markup=active_orders_keyboard(swaps))

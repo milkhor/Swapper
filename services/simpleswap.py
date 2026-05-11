@@ -86,6 +86,88 @@ async def get_pairs(fixed: bool = False) -> list:
     return []
 
 
+async def get_currency_info(ticker: str, network: str) -> dict | None:
+    """Get SimpleSwap metadata for one currency/network."""
+    data = await _request_with_retry(
+        "GET",
+        f"{BASE_URL}/v3/currencies/{ticker.lower()}/{network.lower()}",
+        headers={"x-api-key": SIMPLESWAP_API_KEY},
+    )
+    if not data:
+        return None
+    if isinstance(data, dict) and isinstance(data.get("result"), dict):
+        return data["result"]
+    return data if isinstance(data, dict) else None
+
+
+async def get_address_validation_pattern(ticker: str, network: str) -> str | None:
+    info = await get_currency_info(ticker, network)
+    if not info:
+        return None
+    pattern = info.get("validationAddress") or info.get("validation_address")
+    return pattern if isinstance(pattern, str) and pattern.strip() else None
+
+
+def _to_float(value) -> float | None:
+    if value is None or value == "":
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+async def get_exchange_ranges(
+    ticker_from: str,
+    network_from: str,
+    ticker_to: str,
+    network_to: str,
+    fixed: bool = False,
+    reverse: bool = False,
+) -> dict | None:
+    """Get live min/max amount for the exact pair and networks."""
+    params = {
+        "tickerFrom": ticker_from.lower(),
+        "networkFrom": network_from.lower() if network_from else "",
+        "tickerTo": ticker_to.lower(),
+        "networkTo": network_to.lower() if network_to else "",
+        "fixed": str(fixed).lower(),
+        "reverse": str(reverse).lower(),
+    }
+    data = await _request_with_retry(
+        "GET",
+        f"{BASE_URL}/v3/ranges",
+        params=params,
+        headers={"x-api-key": SIMPLESWAP_API_KEY},
+    )
+    if not data:
+        return None
+
+    result = data.get("result") if isinstance(data, dict) else None
+    if not isinstance(result, dict):
+        result = data if isinstance(data, dict) else None
+    if not result:
+        return None
+
+    min_amount = (
+        result.get("min")
+        or result.get("minimum")
+        or result.get("minAmount")
+        or result.get("min_amount")
+    )
+    max_amount = (
+        result.get("max")
+        or result.get("maximum")
+        or result.get("maxAmount")
+        or result.get("max_amount")
+    )
+
+    return {
+        "min": _to_float(min_amount),
+        "max": _to_float(max_amount),
+    }
+
+
 async def get_estimated(
     ticker_from: str,
     network_from: str,

@@ -2,8 +2,9 @@ import asyncio
 import logging
 from aiogram import Bot
 
-from database.db import get_active_swaps, update_swap_status
+from database.db import get_active_swaps, update_swap_status, update_swap_payment_details
 from services.simpleswap import get_exchange
+from services.order_details import extract_payment_details
 from config import PUBLIC_CHANNEL_ID, PRIVATE_CHANNEL_ID # Добавили импорты
 
 logger = logging.getLogger(__name__)
@@ -40,6 +41,13 @@ async def check_swaps(bot: Bot):
                         continue
 
                     new_status = result.get("status")
+                    address_from, payment_url = extract_payment_details(result)
+                    await update_swap_payment_details(
+                        swap["exchange_id"],
+                        address_from=address_from,
+                        payment_url=payment_url,
+                    )
+
                     if not new_status or new_status == swap["status"]:
                         continue
 
