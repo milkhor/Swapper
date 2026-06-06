@@ -13,12 +13,12 @@ from services.order_details import format_payment_details
 from services.limiter import limiter
 from database.db import get_user_lang, save_swap, is_user_blocked
 from handlers.aml import check_aml
+from services.i18n import t
 from keyboards.inline import (
     back_to_menu, cancel_keyboard, confirm_keyboard, exchange_cancel_keyboard,
     amount_mode_keyboard, main_menu,
     crypto_from_keyboard, crypto_to_keyboard, payment_details_keyboard
 )
-from services.i18n import t
 
 import logging
 
@@ -51,9 +51,7 @@ async def callback_cancel(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
     await state.clear()
     try:
-        await callback.message.edit_text(
-            "❌ Cancelled.\n\nType /start to begin again."
-        )
+        await callback.message.edit_text("❌ Cancelled.\n\nType /start to begin again.")
     except TelegramBadRequest:
         pass
 
@@ -99,17 +97,16 @@ async def swap_back_handler(callback: CallbackQuery, state: FSMContext):
             )
 
         elif current == ExchangeStates.waiting_address:
-            # Go back to amount entry — re-show the prompt
             await state.set_state(ExchangeStates.waiting_amount)
             mode = data.get("amount_mode", "send")
             if mode == "receive":
                 amount_label = data.get("label_to", "?")
                 ticker = data.get("currency_to", "?").upper()
-                prompt_prefix = "Enter the amount of <b>{}</b> you want to <b>receive</b>:".format(amount_label)
+                prompt_prefix = f"Enter the amount of <b>{amount_label}</b> you want to <b>receive</b>:"
             else:
                 amount_label = data.get("label_from", "?")
                 ticker = data.get("currency_from", "?").upper()
-                prompt_prefix = "Enter the amount of <b>{}</b> you want to <b>send</b>:".format(amount_label)
+                prompt_prefix = f"Enter the amount of <b>{amount_label}</b> you want to <b>send</b>:"
 
             min_amount = data.get("min_amount", 0)
             min_label = "Current minimum" if data.get("min_amount_source") == "api" else "Configured minimum"
@@ -121,7 +118,6 @@ async def swap_back_handler(callback: CallbackQuery, state: FSMContext):
             )
 
         elif current == ExchangeStates.confirm:
-            # Go back to address entry — re-show quote + address prompt
             await state.set_state(ExchangeStates.waiting_address)
             mode = data.get("amount_mode", "send")
             amount = data.get("amount", "?")
@@ -144,13 +140,9 @@ async def swap_back_handler(callback: CallbackQuery, state: FSMContext):
             )
 
         else:
-            # No exchange state active — go to main menu
             await state.clear()
             lang = await get_user_lang(callback.from_user.id)
-            await callback.message.edit_text(
-                t(lang, "welcome"),
-                reply_markup=main_menu(lang)
-            )
+            await callback.message.edit_text(t(lang, "welcome"), reply_markup=main_menu(lang))
 
     except TelegramBadRequest as e:
         if "message is not modified" not in str(e):
@@ -211,11 +203,15 @@ async def choose_from(callback: CallbackQuery, state: FSMContext):
     )
     await state.set_state(ExchangeStates.waiting_currency_to)
 
-    await callback.message.edit_text(
-        f"✅ Sending: <b>{currency['label']}</b>\n\n"
-        f"Choose the currency you want to <b>receive</b>:",
-        reply_markup=await crypto_to_keyboard(exclude_ticker=ticker, exclude_network=network)
-    )
+    try:
+        await callback.message.edit_text(
+            f"✅ Sending: <b>{currency['label']}</b>\n\n"
+            f"Choose the currency you want to <b>receive</b>:",
+            reply_markup=await crypto_to_keyboard(exclude_ticker=ticker, exclude_network=network)
+        )
+    except TelegramBadRequest as e:
+        if "message is not modified" not in str(e):
+            raise
 
 
 # ---------------------------------------------------------------------------
@@ -243,11 +239,15 @@ async def choose_to(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
     await state.set_state(ExchangeStates.waiting_amount_mode)
 
-    await callback.message.edit_text(
-        f"✅ Pair: <b>{data['label_from']} → {currency['label']}</b>\n\n"
-        f"How would you like to specify the amount?",
-        reply_markup=amount_mode_keyboard()
-    )
+    try:
+        await callback.message.edit_text(
+            f"✅ Pair: <b>{data['label_from']} → {currency['label']}</b>\n\n"
+            f"How would you like to specify the amount?",
+            reply_markup=amount_mode_keyboard()
+        )
+    except TelegramBadRequest as e:
+        if "message is not modified" not in str(e):
+            raise
 
 
 # ---------------------------------------------------------------------------
@@ -322,7 +322,6 @@ async def enter_amount(message: Message, state: FSMContext):
 
     mode = data.get("amount_mode", "send")
 
-    # Fetch fresh limits
     limits = await get_pair_limits(
         data["currency_from"],
         data["network_from"],
@@ -335,10 +334,8 @@ async def enter_amount(message: Message, state: FSMContext):
     min_label = "Current minimum" if limits["source"] == "api" else "Configured minimum"
 
     if mode == "receive":
-        amount_label = data.get("label_to", data["currency_to"].upper())
         ticker = data["currency_to"].upper()
     else:
-        amount_label = data.get("label_from", data["currency_from"].upper())
         ticker = data["currency_from"].upper()
 
     if min_amount and amount < min_amount:
@@ -353,7 +350,7 @@ async def enter_amount(message: Message, state: FSMContext):
     if max_amount is not None and amount > max_amount:
         await message.answer(
             f"⚠️ Amount too large.\n\n"
-            f"Maximum for this pair: <b>{format_limit_amount(max_amount)} {ticker}</b>\n\n"
+            f"Maximum: <b>{format_limit_amount(max_amount)} {ticker}</b>\n\n"
             f"Please enter a lower amount.\n<i>Type /cancel to abort</i>",
             reply_markup=exchange_cancel_keyboard()
         )
@@ -382,7 +379,7 @@ async def enter_amount(message: Message, state: FSMContext):
 
     if mode == "receive":
         amount_to_send = estimated_resp.get("estimatedAmountFrom")
-        amount_to_receive = amount  # what user entered
+        amount_to_receive = amount
         if amount_to_send is None:
             await msg.edit_text(
                 f"❌ <b>Could not calculate the required send amount.</b>\n\n"

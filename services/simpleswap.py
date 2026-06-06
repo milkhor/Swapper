@@ -18,10 +18,6 @@ NETWORKS = {
 }
 
 
-# ---------------------------------------------------------------------------
-# Internal helpers
-# ---------------------------------------------------------------------------
-
 async def _request_with_retry(method: str, url: str, retries: int = 3, **kwargs) -> dict | None:
     for attempt in range(retries):
         try:
@@ -66,12 +62,7 @@ def _get_network_for_ticker(ticker: str, pairs: list) -> str | None:
     return None
 
 
-# ---------------------------------------------------------------------------
-# Public API
-# ---------------------------------------------------------------------------
-
 async def get_pairs(fixed: bool = False) -> list:
-    """Get all available currencies from SimpleSwap."""
     data = await _request_with_retry(
         "GET",
         f"{BASE_URL}/v3/currencies",
@@ -84,88 +75,6 @@ async def get_pairs(fixed: bool = False) -> list:
     if isinstance(data, dict):
         return data.get("result") or data.get("data") or []
     return []
-
-
-async def get_currency_info(ticker: str, network: str) -> dict | None:
-    """Get SimpleSwap metadata for one currency/network."""
-    data = await _request_with_retry(
-        "GET",
-        f"{BASE_URL}/v3/currencies/{ticker.lower()}/{network.lower()}",
-        headers={"x-api-key": SIMPLESWAP_API_KEY},
-    )
-    if not data:
-        return None
-    if isinstance(data, dict) and isinstance(data.get("result"), dict):
-        return data["result"]
-    return data if isinstance(data, dict) else None
-
-
-async def get_address_validation_pattern(ticker: str, network: str) -> str | None:
-    info = await get_currency_info(ticker, network)
-    if not info:
-        return None
-    pattern = info.get("validationAddress") or info.get("validation_address")
-    return pattern if isinstance(pattern, str) and pattern.strip() else None
-
-
-def _to_float(value) -> float | None:
-    if value is None or value == "":
-        return None
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return None
-
-
-async def get_exchange_ranges(
-    ticker_from: str,
-    network_from: str,
-    ticker_to: str,
-    network_to: str,
-    fixed: bool = False,
-    reverse: bool = False,
-) -> dict | None:
-    """Get live min/max amount for the exact pair and networks."""
-    params = {
-        "tickerFrom": ticker_from.lower(),
-        "networkFrom": network_from.lower() if network_from else "",
-        "tickerTo": ticker_to.lower(),
-        "networkTo": network_to.lower() if network_to else "",
-        "fixed": str(fixed).lower(),
-        "reverse": str(reverse).lower(),
-    }
-    data = await _request_with_retry(
-        "GET",
-        f"{BASE_URL}/v3/ranges",
-        params=params,
-        headers={"x-api-key": SIMPLESWAP_API_KEY},
-    )
-    if not data:
-        return None
-
-    result = data.get("result") if isinstance(data, dict) else None
-    if not isinstance(result, dict):
-        result = data if isinstance(data, dict) else None
-    if not result:
-        return None
-
-    min_amount = (
-        result.get("min")
-        or result.get("minimum")
-        or result.get("minAmount")
-        or result.get("min_amount")
-    )
-    max_amount = (
-        result.get("max")
-        or result.get("maximum")
-        or result.get("maxAmount")
-        or result.get("max_amount")
-    )
-
-    return {
-        "min": _to_float(min_amount),
-        "max": _to_float(max_amount),
-    }
 
 
 async def get_estimated(
@@ -239,6 +148,59 @@ async def get_estimated(
         return None
 
 
+async def get_estimated_reverse(
+    ticker_from: str,
+    network_from: str,
+    ticker_to: str,
+    network_to: str,
+    amount: str,
+) -> dict | None:
+    try:
+        t_from = ticker_from.lower()
+        n_from = network_from.lower() if network_from else ""
+        t_to = ticker_to.lower()
+        n_to = network_to.lower() if network_to else ""
+
+        params = {
+            "tickerFrom": t_to,
+            "networkFrom": n_to,
+            "tickerTo": t_from,
+            "networkTo": n_from,
+            "amount": amount,
+            "fixed": "true",
+        }
+
+        logger.info(f"DEBUG REVERSE PARAMS: {params}")
+
+        data = await _request_with_retry(
+            "GET",
+            f"{BASE_URL}/v3/estimates",
+            params=params,
+            headers={"x-api-key": SIMPLESWAP_API_KEY},
+        )
+
+        if not data or "result" not in data:
+            logger.error(f"!!! REVERSE QUOTE ERROR: {data}")
+            return None
+
+        result = data["result"]
+        logger.info(f"!!! REVERSE QUOTE SUCCESS: {result}")
+
+        estimated = result.get("estimatedAmount") or result.get("amountTo") or result.get("estimatedAmountTo")
+
+        if estimated is None:
+            return None
+
+        return {
+            "estimatedAmountFrom": float(estimated),
+            "rateId": result.get("rateId"),
+        }
+
+    except Exception as e:
+        logger.error(f"get_estimated_reverse error: {e}")
+        return None
+
+
 async def create_exchange(
     ticker_from: str,
     network_from: str,
@@ -250,7 +212,6 @@ async def create_exchange(
     rate_id: str | None = None,
 ) -> dict | None:
     try:
-        # 1. Принудительно чистим параметры, как мы это сделали для get_estimated
         t_from = ticker_from.lower()
         n_from = network_from.lower() if network_from else ""
         t_to = ticker_to.lower()
@@ -268,7 +229,6 @@ async def create_exchange(
         if rate_id:
             payload["rateId"] = rate_id
 
-        # 2. Логируем, что именно отправляем
         logger.info(f"DEBUG CREATE PAYLOAD: {payload}")
 
         data = await _request_with_retry(
@@ -278,12 +238,10 @@ async def create_exchange(
             headers={"x-api-key": SIMPLESWAP_API_KEY},
         )
 
-        # 3. Логируем ответ, если API ругается
         if not data or (isinstance(data, dict) and "result" not in data):
             logger.error(f"!!! CREATE ERROR FULL RESPONSE: {data}")
             return None
 
-        # Возвращаем результат
         if isinstance(data, dict) and "result" in data:
             return data["result"]
             
@@ -295,7 +253,6 @@ async def create_exchange(
 
 
 async def get_exchange(public_id: str) -> dict | None:
-    """Get exchange status by ID."""
     data = await _request_with_retry(
         "GET",
         f"{BASE_URL}/v3/exchanges/{public_id}",
