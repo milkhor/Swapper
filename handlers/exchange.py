@@ -322,16 +322,10 @@ async def enter_amount(message: Message, state: FSMContext):
 
     mode = data.get("amount_mode", "send")
 
-    limits = await get_pair_limits(
-        data["currency_from"],
-        data["network_from"],
-        data["currency_to"],
-        data["network_to"],
-        reverse=(mode == "receive"),
-    )
-    min_amount = limits["min"] or 0.0
-    max_amount = limits["max"]
-    min_label = "Current minimum" if limits["source"] == "api" else "Configured minimum"
+    # Use limits already fetched and cached in choose_amount_mode step
+    min_amount = data.get("min_amount") or 0.0
+    max_amount = data.get("max_amount")
+    min_label = "Current minimum" if data.get("min_amount_source") == "api" else "Configured minimum"
 
     if mode == "receive":
         ticker = data["currency_to"].upper()

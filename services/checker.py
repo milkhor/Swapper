@@ -59,7 +59,7 @@ async def check_swaps(bot: Bot):
                     if PRIVATE_CHANNEL_ID:
                         try:
                             await bot.send_message(
-                                PRIVATE_CHANNEL_ID,
+                                int(PRIVATE_CHANNEL_ID),
                                 f"🔔 <b>Status Update</b>\n"
                                 f"ID: <code>{swap['exchange_id']}</code>\n"
                                 f"User: <code>{swap['user_id']}</code>\n"
@@ -74,7 +74,7 @@ async def check_swaps(bot: Bot):
                             cur_from = swap['currency_from'].split('_')[0].upper()
                             cur_to = swap['currency_to'].split('_')[0].upper()
                             await bot.send_message(
-                                PUBLIC_CHANNEL_ID,
+                                int(PUBLIC_CHANNEL_ID),
                                 f"✅ <b>Successful Exchange!</b>\n\n"
                                 f"🔄 {cur_from} ➡️ {cur_to}\n"
                                 f"💰 Amount: <b>{swap['amount_from']} {cur_from}</b>\n"

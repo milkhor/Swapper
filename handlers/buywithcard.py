@@ -97,7 +97,7 @@ async def choose_crypto_for_fiat(callback: CallbackQuery, state: FSMContext):
         network_to=network,
         label_to=currency["label"]
     )
-    await state.set_state(ExchangeStates.waiting_amount_send)
+    await state.set_state(ExchangeStates.waiting_amount)
     min_amount = await get_min_amount(data["currency_from"], data["network_from"])
 
     await callback.message.edit_text(
@@ -109,7 +109,7 @@ async def choose_crypto_for_fiat(callback: CallbackQuery, state: FSMContext):
     )
 
 
-@router.message(ExchangeStates.waiting_amount_send)
+@router.message(ExchangeStates.waiting_amount)
 async def enter_fiat_amount(message: Message, state: FSMContext):
     data = await state.get_data()
     if not data.get("is_fiat"):
@@ -232,7 +232,8 @@ async def confirm_fiat_exchange(callback: CallbackQuery, state: FSMContext):
         currency_to=f"{data['currency_to']}_{data['network_to']}",
         amount_from=data["amount"],
         amount_to=data["amount_to"],
-        address_to=data["address_to"]
+        address_to=data["address_to"],
+        payment_url=redirect_url,
     )
     
     # Блок отправки в канал

@@ -148,59 +148,6 @@ async def get_estimated(
         return None
 
 
-async def get_estimated_reverse(
-    ticker_from: str,
-    network_from: str,
-    ticker_to: str,
-    network_to: str,
-    amount: str,
-) -> dict | None:
-    try:
-        t_from = ticker_from.lower()
-        n_from = network_from.lower() if network_from else ""
-        t_to = ticker_to.lower()
-        n_to = network_to.lower() if network_to else ""
-
-        params = {
-            "tickerFrom": t_to,
-            "networkFrom": n_to,
-            "tickerTo": t_from,
-            "networkTo": n_from,
-            "amount": amount,
-            "fixed": "true",
-        }
-
-        logger.info(f"DEBUG REVERSE PARAMS: {params}")
-
-        data = await _request_with_retry(
-            "GET",
-            f"{BASE_URL}/v3/estimates",
-            params=params,
-            headers={"x-api-key": SIMPLESWAP_API_KEY},
-        )
-
-        if not data or "result" not in data:
-            logger.error(f"!!! REVERSE QUOTE ERROR: {data}")
-            return None
-
-        result = data["result"]
-        logger.info(f"!!! REVERSE QUOTE SUCCESS: {result}")
-
-        estimated = result.get("estimatedAmount") or result.get("amountTo") or result.get("estimatedAmountTo")
-
-        if estimated is None:
-            return None
-
-        return {
-            "estimatedAmountFrom": float(estimated),
-            "rateId": result.get("rateId"),
-        }
-
-    except Exception as e:
-        logger.error(f"get_estimated_reverse error: {e}")
-        return None
-
-
 async def create_exchange(
     ticker_from: str,
     network_from: str,
@@ -250,6 +197,43 @@ async def create_exchange(
     except Exception as e:
         logger.error(f"create_exchange error: {e}")
         return None
+
+
+async def get_exchange_ranges(
+    ticker_from: str,
+    network_from: str,
+    ticker_to: str,
+    network_to: str,
+    fixed: bool = False,
+    reverse: bool = False,
+) -> dict | None:
+    params = {
+        "tickerFrom": ticker_from.lower(),
+        "networkFrom": network_from.lower() if network_from else "",
+        "tickerTo": ticker_to.lower(),
+        "networkTo": network_to.lower() if network_to else "",
+        "fixed": str(fixed).lower(),
+        "reverse": str(reverse).lower(),
+    }
+    data = await _request_with_retry(
+        "GET",
+        f"{BASE_URL}/v3/ranges",
+        params=params,
+        headers={"x-api-key": SIMPLESWAP_API_KEY},
+    )
+    if not data:
+        return None
+    result = data.get("result") if isinstance(data, dict) and "result" in data else data
+    if not isinstance(result, dict):
+        return None
+    min_val = result.get("min") or result.get("minAmount")
+    max_val = result.get("max") or result.get("maxAmount")
+    if min_val is None:
+        return None
+    return {
+        "min": float(min_val),
+        "max": float(max_val) if max_val is not None else None,
+    }
 
 
 async def get_exchange(public_id: str) -> dict | None:
