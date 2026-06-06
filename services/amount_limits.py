@@ -7,12 +7,14 @@ async def get_pair_limits(
     network_from: str,
     ticker_to: str,
     network_to: str,
+    reverse: bool = False,
 ) -> dict:
     ranges = await simpleswap.get_exchange_ranges(
         ticker_from=ticker_from,
         network_from=network_from,
         ticker_to=ticker_to,
         network_to=network_to,
+        reverse=reverse,
     )
     if ranges and ranges.get("min") is not None:
         min_amount = ranges["min"]

@@ -65,13 +65,31 @@ def cancel_keyboard(lang: str = "en") -> InlineKeyboardMarkup:
     ])
 
 
+def exchange_cancel_keyboard(lang: str = "en") -> InlineKeyboardMarkup:
+    """Back button for the swap flow — goes to previous step, not main menu."""
+    from services.i18n import t
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=t(lang, "btn_back"), callback_data="swap_back")]
+    ])
+
+
+def amount_mode_keyboard(lang: str = "en") -> InlineKeyboardMarkup:
+    from services.i18n import t
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="💰 I want to send", callback_data="mode_send")],
+        [InlineKeyboardButton(text="💎 I want to receive", callback_data="mode_receive")],
+        [InlineKeyboardButton(text=t(lang, "btn_back"), callback_data="swap_back")],
+    ])
+
+
 def confirm_keyboard(lang: str = "en") -> InlineKeyboardMarkup:
     from services.i18n import t
     return InlineKeyboardMarkup(inline_keyboard=[
         [
             InlineKeyboardButton(text=t(lang, "btn_confirm"), callback_data="confirm_yes"),
             InlineKeyboardButton(text=t(lang, "btn_cancel"),  callback_data="confirm_no"),
-        ]
+        ],
+        [InlineKeyboardButton(text=t(lang, "btn_back"), callback_data="swap_back")],
     ])
 
 

@@ -174,10 +174,10 @@ async def get_estimated(
     ticker_to: str,
     network_to: str,
     amount: str,
-    fixed: bool = False
+    fixed: bool = False,
+    reverse: bool = False,
 ) -> dict | None:
     try:
-        # Принудительно в нижний регистр
         t_from = ticker_from.lower()
         n_from = network_from.lower() if network_from else ""
         t_to = ticker_to.lower()
@@ -190,9 +190,9 @@ async def get_estimated(
             "networkTo": n_to,
             "amount": amount,
             "fixed": str(fixed).lower(),
+            "reverse": str(reverse).lower(),
         }
 
-        # Логируем, что именно мы отправляем
         logger.info(f"DEBUG SENDING PARAMS: {params}")
 
         data = await _request_with_retry(
@@ -203,19 +203,32 @@ async def get_estimated(
         )
 
         if not data or "result" not in data:
-            # ЭТО САМАЯ ВАЖНАЯ СТРОКА СЕЙЧАС:
             logger.error(f"!!! QUOTE ERROR FULL RESPONSE: {data}")
             return None
 
         result = data["result"]
-        # Логируем успешный ответ для отладки полей
         logger.info(f"!!! QUOTE SUCCESS FULL RESULT: {result}")
 
-        estimated = result.get("estimatedAmount") or result.get("amountTo") or result.get("estimatedAmountTo")
+        if reverse:
+            # In reverse mode: `amount` is what user wants to receive.
+            # API returns how much the user needs to send.
+            estimated_from = (
+                result.get("estimatedAmountFrom")
+                or result.get("amountFrom")
+                or result.get("estimatedAmount")
+                or result.get("amount_from")
+            )
+            if estimated_from is None:
+                return None
+            return {
+                "estimatedAmountTo": float(amount),
+                "estimatedAmountFrom": float(estimated_from),
+                "rateId": result.get("rateId"),
+            }
 
+        estimated = result.get("estimatedAmount") or result.get("amountTo") or result.get("estimatedAmountTo")
         if estimated is None:
             return None
-
         return {
             "estimatedAmountTo": float(estimated),
             "rateId": result.get("rateId"),
