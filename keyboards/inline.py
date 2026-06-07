@@ -27,13 +27,31 @@ def cancel_keyboard(lang: str = "en") -> InlineKeyboardMarkup:
     ])
 
 
+def exchange_cancel_keyboard(lang: str = "en") -> InlineKeyboardMarkup:
+    """Back button for the swap flow — goes to previous step, not main menu."""
+    from services.i18n import t
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=t(lang, "btn_back"), callback_data="swap_back")]
+    ])
+
+
+def amount_mode_keyboard(lang: str = "en") -> InlineKeyboardMarkup:
+    from services.i18n import t
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="💰 I want to send", callback_data="mode_send")],
+        [InlineKeyboardButton(text="💎 I want to receive", callback_data="mode_receive")],
+        [InlineKeyboardButton(text=t(lang, "btn_back"), callback_data="swap_back")],
+    ])
+
+
 def confirm_keyboard(lang: str = "en") -> InlineKeyboardMarkup:
     from services.i18n import t
     return InlineKeyboardMarkup(inline_keyboard=[
         [
             InlineKeyboardButton(text=t(lang, "btn_confirm"), callback_data="confirm_yes"),
             InlineKeyboardButton(text=t(lang, "btn_cancel"),  callback_data="confirm_no"),
-        ]
+        ],
+        [InlineKeyboardButton(text=t(lang, "btn_back"), callback_data="swap_back")],
     ])
 
 
@@ -47,13 +65,40 @@ def fiat_confirm_keyboard(lang: str = "en") -> InlineKeyboardMarkup:
     ])
 
 
-def swap_mode_keyboard(lang: str = "en") -> InlineKeyboardMarkup:
-    from services.i18n import t
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="💸 Send Amount", callback_data="mode_send")],
-        [InlineKeyboardButton(text="💰 Receive Amount", callback_data="mode_receive")],
-        [InlineKeyboardButton(text=t(lang, "btn_back"), callback_data="action_back")]
+def payment_details_keyboard(exchange_id: str,
+                             payment_url: str | None = None) -> InlineKeyboardMarkup:
+    buttons = []
+    if payment_url:
+        buttons.append([InlineKeyboardButton(text="💳 Continue payment", url=payment_url)])
+    buttons.append([
+        InlineKeyboardButton(
+            text="🔎 View payment details",
+            callback_data=f"view_payment_{exchange_id}"
+        )
     ])
+    buttons.append([InlineKeyboardButton(text="🏠 Main menu", callback_data="action_menu")])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def active_orders_keyboard(swaps: list, lang: str = "en") -> InlineKeyboardMarkup:
+    from services.i18n import t
+    from services.order_details import is_payment_active
+    buttons = []
+    for swap in swaps:
+        if not is_payment_active(swap.get("status")):
+            continue
+        exchange_id = swap.get("exchange_id")
+        if not exchange_id:
+            continue
+        text = "💳 Continue payment" if swap.get("payment_url") else "🔎 View payment details"
+        buttons.append([
+            InlineKeyboardButton(
+                text=f"{text}: {exchange_id}",
+                callback_data=f"view_payment_{exchange_id}"
+            )
+        ])
+    buttons.append([InlineKeyboardButton(text=t(lang, "btn_back"), callback_data="action_back")])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
 def admin_back_kb():

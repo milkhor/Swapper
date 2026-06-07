@@ -47,7 +47,7 @@ async def main():
     )
 
     dp = Dispatcher(storage=MemoryStorage())
-    dp.include_router(exchange.router)
+    dp.include_router(exchange.router)  # first: handles swap_back and exchange states
     dp.include_router(start.router)
     dp.include_router(language.router)
     dp.include_router(status.router)

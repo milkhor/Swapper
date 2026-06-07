@@ -3,30 +3,27 @@ from aiogram.types import Message, CallbackQuery
 from aiogram.fsm.context import FSMContext
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command, Filter
-import re
 from config import PRIVATE_CHANNEL_ID
 from states import ExchangeStates
 from services import simpleswap
-from services.currencies import get_currency, get_min_amount, currency_key
+from services.address_validation import validate_wallet_address
+from services.amount_limits import format_limit_amount, get_pair_limits
+from services.currencies import get_currency
+from services.order_details import format_payment_details
 from services.limiter import limiter
-from database.db import save_swap, is_user_blocked
+from database.db import get_user_lang, save_swap, is_user_blocked
 from handlers.aml import check_aml
 from services.i18n import t
-from database.db import get_user_lang
 from keyboards.inline import (
-    back_to_menu, cancel_keyboard, confirm_keyboard,
-    crypto_from_keyboard, crypto_to_keyboard, swap_mode_keyboard
+    back_to_menu, cancel_keyboard, confirm_keyboard, exchange_cancel_keyboard,
+    amount_mode_keyboard, main_menu,
+    crypto_from_keyboard, crypto_to_keyboard, payment_details_keyboard
 )
 
 import logging
 
 logger = logging.getLogger(__name__)
 router = Router()
-
-ADDRESS_MIN_LENGTH = {
-    "btc": 25, "eth": 42, "usdt": 42,
-    "sol": 32, "bnb": 42, "trx": 34,
-}
 
 
 class IsNotFiat(Filter):
@@ -35,102 +32,9 @@ class IsNotFiat(Filter):
         return not data.get("is_fiat", False)
 
 
-async def go_back(callback: CallbackQuery, state: FSMContext, lang: str):
-    data = await state.get_data()
-    previous_state = data.get("previous_state")
-    
-    if not previous_state or previous_state == ExchangeStates.waiting_swap_mode:
-        await state.clear()
-        await callback.message.edit_text(
-            text=t(lang, "welcome"),
-            reply_markup=back_to_menu(lang)
-        )
-        return
-    
-    if previous_state == ExchangeStates.waiting_swap_mode:
-        await state.set_state(ExchangeStates.waiting_swap_mode)
-        await callback.message.edit_text(
-            "🔄 <b>New Swap</b>\n\nChoose swap mode:",
-            reply_markup=swap_mode_keyboard(lang)
-        )
-    
-    elif previous_state == ExchangeStates.waiting_currency_from:
-        await state.set_state(ExchangeStates.waiting_currency_from)
-        await callback.message.edit_text(
-            "🔄 <b>New Swap</b>\n\nChoose the currency you want to <b>send</b>:",
-            reply_markup=await crypto_from_keyboard(lang)
-        )
-    
-    elif previous_state == ExchangeStates.waiting_currency_to:
-        currency_from = data.get("currency_from")
-        network_from = data.get("network_from")
-        label_from = data.get("label_from")
-        await state.set_state(ExchangeStates.waiting_currency_to)
-        await callback.message.edit_text(
-            f"✅ Sending: <b>{label_from}</b>\n\n"
-            f"Choose the currency you want to <b>receive</b>:",
-            reply_markup=await crypto_to_keyboard(lang, exclude_ticker=currency_from, exclude_network=network_from)
-        )
-    
-    elif previous_state in (ExchangeStates.waiting_amount_send, ExchangeStates.waiting_amount_receive):
-        currency_to = data.get("currency_to")
-        network_to = data.get("network_to")
-        label_to = data.get("label_to")
-        label_from = data.get("label_from")
-        
-        await state.set_state(previous_state)
-        
-        if previous_state == ExchangeStates.waiting_amount_send:
-            min_amount = await get_min_amount(data["currency_from"], data["network_from"])
-            await callback.message.edit_text(
-                f"✅ Receiving: <b>{label_to}</b>\n\n"
-                f"Enter the amount in <b>{label_from}</b>:\n"
-                f"<i>Minimum: {min_amount} {data['currency_from'].upper()}</i>\n\n"
-                f"<i>Type /cancel to abort</i>",
-                reply_markup=cancel_keyboard(lang)
-            )
-        else:
-            await callback.message.edit_text(
-                f"✅ Sending: <b>{label_from}</b>\n\n"
-                f"Enter the amount in <b>{label_to}</b>:\n"
-                f"<i>You'll send the calculated {label_from} amount</i>\n\n"
-                f"<i>Type /cancel to abort</i>",
-                reply_markup=cancel_keyboard(lang)
-            )
-    
-    elif previous_state == ExchangeStates.waiting_address:
-        amount = data.get("amount")
-        label_from = data.get("label_from")
-        label_to = data.get("label_to")
-        amount_to = data.get("amount_to")
-        
-        await state.set_state(ExchangeStates.waiting_address)
-        await callback.message.edit_text(
-            f"💱 <b>Quote:</b>\n\n"
-            f"You send: <b>{amount} {label_from}</b>\n"
-            f"You receive: <b>≈{amount_to} {label_to}</b>\n\n"
-            f"Enter destination wallet address for <b>{label_to}</b>:\n\n"
-            f"<i>Type /cancel to abort</i>",
-            reply_markup=cancel_keyboard(lang)
-        )
-    
-    elif previous_state == ExchangeStates.confirm:
-        address_to = data.get("address_to")
-        amount = data.get("amount")
-        label_from = data.get("label_from")
-        label_to = data.get("label_to")
-        amount_to = data.get("amount_to")
-        
-        await state.set_state(ExchangeStates.confirm)
-        await callback.message.edit_text(
-            f"📋 <b>Confirm swap:</b>\n\n"
-            f"You send: <b>{amount} {label_from}</b>\n"
-            f"You receive: <b>≈{amount_to} {label_to}</b>\n"
-            f"Address: <code>{address_to}</code>\n\n"
-            f"Everything correct?",
-            reply_markup=confirm_keyboard(lang)
-        )
-
+# ---------------------------------------------------------------------------
+# /cancel
+# ---------------------------------------------------------------------------
 
 @router.message(Command("cancel"))
 async def cmd_cancel(message: Message, state: FSMContext):
@@ -147,103 +51,146 @@ async def callback_cancel(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
     await state.clear()
     try:
-        await callback.message.edit_text(
-            "❌ Cancelled.\n\nType /start to begin again."
-        )
+        await callback.message.edit_text("❌ Cancelled.\n\nType /start to begin again.")
     except TelegramBadRequest:
         pass
 
 
-@router.callback_query(F.data == "action_back")
-async def callback_back_exchange(callback: CallbackQuery, state: FSMContext):
-    await callback.answer()
-    current_state = await state.get_state()
-    
-    if current_state and current_state.startswith("ExchangeStates"):
-        lang = await get_user_lang(callback.from_user.id)
-        await go_back(callback, state, lang)
-    else:
-        lang = await get_user_lang(callback.from_user.id)
-        await state.clear()
-        from keyboards.inline import main_menu
-        await callback.message.edit_text(
-            text=t(lang, "welcome"),
-            reply_markup=main_menu(lang)
-        )
+# ---------------------------------------------------------------------------
+# swap_back — step-by-step Back navigation within the swap flow
+# ---------------------------------------------------------------------------
 
+@router.callback_query(F.data == "swap_back")
+async def swap_back_handler(callback: CallbackQuery, state: FSMContext):
+    await callback.answer()
+    current = await state.get_state()
+    data = await state.get_data()
+
+    try:
+        if current == ExchangeStates.waiting_currency_to:
+            await state.set_state(ExchangeStates.waiting_currency_from)
+            await callback.message.edit_text(
+                "🔄 <b>New swap</b>\n\nChoose the currency you want to <b>send</b>:",
+                reply_markup=await crypto_from_keyboard()
+            )
+
+        elif current == ExchangeStates.waiting_amount_mode:
+            await state.set_state(ExchangeStates.waiting_currency_to)
+            label_from = data.get("label_from", data.get("currency_from", "?").upper())
+            await callback.message.edit_text(
+                f"✅ Sending: <b>{label_from}</b>\n\n"
+                f"Choose the currency you want to <b>receive</b>:",
+                reply_markup=await crypto_to_keyboard(
+                    exclude_ticker=data.get("currency_from"),
+                    exclude_network=data.get("network_from"),
+                )
+            )
+
+        elif current == ExchangeStates.waiting_amount:
+            await state.set_state(ExchangeStates.waiting_amount_mode)
+            label_from = data.get("label_from", "?")
+            label_to = data.get("label_to", "?")
+            await callback.message.edit_text(
+                f"✅ Pair: <b>{label_from} → {label_to}</b>\n\n"
+                f"How would you like to specify the amount?",
+                reply_markup=amount_mode_keyboard()
+            )
+
+        elif current == ExchangeStates.waiting_address:
+            await state.set_state(ExchangeStates.waiting_amount)
+            mode = data.get("amount_mode", "send")
+            if mode == "receive":
+                amount_label = data.get("label_to", "?")
+                ticker = data.get("currency_to", "?").upper()
+                prompt_prefix = f"Enter the amount of <b>{amount_label}</b> you want to <b>receive</b>:"
+            else:
+                amount_label = data.get("label_from", "?")
+                ticker = data.get("currency_from", "?").upper()
+                prompt_prefix = f"Enter the amount of <b>{amount_label}</b> you want to <b>send</b>:"
+
+            min_amount = data.get("min_amount", 0)
+            min_label = "Current minimum" if data.get("min_amount_source") == "api" else "Configured minimum"
+            await callback.message.edit_text(
+                f"{prompt_prefix}\n"
+                f"<i>{min_label}: {format_limit_amount(min_amount)} {ticker}</i>\n\n"
+                f"<i>Type /cancel to abort</i>",
+                reply_markup=exchange_cancel_keyboard()
+            )
+
+        elif current == ExchangeStates.confirm:
+            await state.set_state(ExchangeStates.waiting_address)
+            mode = data.get("amount_mode", "send")
+            amount = data.get("amount", "?")
+            amount_to = data.get("amount_to", "?")
+            label_from = data.get("label_from", "?")
+            label_to = data.get("label_to", "?")
+            if mode == "receive":
+                send_str = f"≈{amount} {label_from}"
+                receive_str = f"{amount_to} {label_to}"
+            else:
+                send_str = f"{amount} {label_from}"
+                receive_str = f"≈{amount_to} {label_to}"
+            await callback.message.edit_text(
+                f"💱 <b>Quote:</b>\n\n"
+                f"You send: <b>{send_str}</b>\n"
+                f"You receive: <b>{receive_str}</b>\n\n"
+                f"Enter destination wallet address for <b>{label_to}</b>:\n\n"
+                f"<i>Type /cancel to abort</i>",
+                reply_markup=exchange_cancel_keyboard()
+            )
+
+        else:
+            await state.clear()
+            lang = await get_user_lang(callback.from_user.id)
+            await callback.message.edit_text(t(lang, "welcome"), reply_markup=main_menu(lang))
+
+    except TelegramBadRequest as e:
+        if "message is not modified" not in str(e):
+            raise
+
+
+# ---------------------------------------------------------------------------
+# Step 1 — Start swap
+# ---------------------------------------------------------------------------
 
 @router.callback_query(F.data == "action_swap")
 async def start_swap(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
-    lang = await get_user_lang(callback.from_user.id)
 
     allowed, reason = limiter.check(callback.from_user.id)
     if not allowed:
-        await callback.message.edit_text(reason, reply_markup=back_to_menu(lang))
+        await callback.message.edit_text(reason, reply_markup=back_to_menu())
         return
-    
+
     if await is_user_blocked(callback.from_user.id):
         return await callback.answer("You are blocked.", show_alert=True)
 
     if not await check_aml(callback, state):
         return
 
-    await state.set_state(ExchangeStates.waiting_swap_mode)
-    await state.update_data(is_fiat=False, previous_state=None)
-    try:
-        await callback.message.edit_text(
-            "🔄 <b>New Swap</b>\n\nChoose swap mode:",
-            reply_markup=swap_mode_keyboard(lang)
-        )
-    except TelegramBadRequest as e:
-        if "message is not modified" not in str(e):
-            raise
-
-
-@router.callback_query(ExchangeStates.waiting_swap_mode, F.data == "mode_send")
-async def choose_mode_send(callback: CallbackQuery, state: FSMContext):
-    await callback.answer()
-    lang = await get_user_lang(callback.from_user.id)
-    
-    await state.update_data(swap_mode="send", previous_state=ExchangeStates.waiting_swap_mode)
     await state.set_state(ExchangeStates.waiting_currency_from)
-    
+    await state.update_data(is_fiat=False)
     try:
         await callback.message.edit_text(
-            "🔄 <b>New Swap</b>\n\nChoose the currency you want to <b>send</b>:",
-            reply_markup=await crypto_from_keyboard(lang)
+            "🔄 <b>New swap</b>\n\nChoose the currency you want to <b>send</b>:",
+            reply_markup=await crypto_from_keyboard()
         )
     except TelegramBadRequest as e:
         if "message is not modified" not in str(e):
             raise
 
 
-@router.callback_query(ExchangeStates.waiting_swap_mode, F.data == "mode_receive")
-async def choose_mode_receive(callback: CallbackQuery, state: FSMContext):
-    await callback.answer()
-    lang = await get_user_lang(callback.from_user.id)
-    
-    await state.update_data(swap_mode="receive", previous_state=ExchangeStates.waiting_swap_mode)
-    await state.set_state(ExchangeStates.waiting_currency_from)
-    
-    try:
-        await callback.message.edit_text(
-            "🔄 <b>New Swap</b>\n\nChoose the currency you want to <b>send</b>:",
-            reply_markup=await crypto_from_keyboard(lang)
-        )
-    except TelegramBadRequest as e:
-        if "message is not modified" not in str(e):
-            raise
-
+# ---------------------------------------------------------------------------
+# Step 2 — Choose FROM
+# ---------------------------------------------------------------------------
 
 @router.callback_query(ExchangeStates.waiting_currency_from, F.data.startswith("from_"))
 async def choose_from(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
-    lang = await get_user_lang(callback.from_user.id)
     parts = callback.data.split("_")
     ticker = parts[1]
     network = parts[2]
-    
+
     currency = await get_currency(ticker, network)
     if not currency:
         await callback.answer("Unknown currency", show_alert=True)
@@ -252,79 +199,111 @@ async def choose_from(callback: CallbackQuery, state: FSMContext):
     await state.update_data(
         currency_from=ticker,
         network_from=network,
-        label_from=currency["label"],
-        previous_state=ExchangeStates.waiting_currency_from
+        label_from=currency["label"]
     )
     await state.set_state(ExchangeStates.waiting_currency_to)
-    
+
     try:
         await callback.message.edit_text(
             f"✅ Sending: <b>{currency['label']}</b>\n\n"
             f"Choose the currency you want to <b>receive</b>:",
-            reply_markup=await crypto_to_keyboard(lang, exclude_ticker=ticker, exclude_network=network)
+            reply_markup=await crypto_to_keyboard(exclude_ticker=ticker, exclude_network=network)
         )
     except TelegramBadRequest as e:
         if "message is not modified" not in str(e):
             raise
 
 
+# ---------------------------------------------------------------------------
+# Step 3 — Choose TO
+# ---------------------------------------------------------------------------
+
 @router.callback_query(ExchangeStates.waiting_currency_to, F.data.startswith("to_"), IsNotFiat())
 async def choose_to(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
-    lang = await get_user_lang(callback.from_user.id)
     parts = callback.data.split("_")
     ticker = parts[1]
     network = parts[2]
-    
+
     currency = await get_currency(ticker, network)
     if not currency:
         await callback.answer("Unknown currency", show_alert=True)
         return
 
-    data = await state.get_data()
-    swap_mode = data.get("swap_mode", "send")
-
     await state.update_data(
         currency_to=ticker,
         network_to=network,
-        label_to=currency["label"],
-        previous_state=ExchangeStates.waiting_currency_to
+        label_to=currency["label"]
     )
-    
-    if swap_mode == "send":
-        await state.set_state(ExchangeStates.waiting_amount_send)
-        min_amount = await get_min_amount(data["currency_from"], data["network_from"])
-        
-        try:
-            await callback.message.edit_text(
-                f"✅ Receiving: <b>{currency['label']}</b>\n\n"
-                f"Enter the amount in <b>{data['label_from']}</b>:\n"
-                f"<i>Minimum: {min_amount} {data['currency_from'].upper()}</i>\n\n"
-                f"<i>Type /cancel to abort</i>",
-                reply_markup=cancel_keyboard(lang)
-            )
-        except TelegramBadRequest as e:
-            if "message is not modified" not in str(e):
-                raise
+
+    data = await state.get_data()
+    await state.set_state(ExchangeStates.waiting_amount_mode)
+
+    try:
+        await callback.message.edit_text(
+            f"✅ Pair: <b>{data['label_from']} → {currency['label']}</b>\n\n"
+            f"How would you like to specify the amount?",
+            reply_markup=amount_mode_keyboard()
+        )
+    except TelegramBadRequest as e:
+        if "message is not modified" not in str(e):
+            raise
+
+
+# ---------------------------------------------------------------------------
+# Step 3.5 — Choose amount mode (Send or Receive)
+# ---------------------------------------------------------------------------
+
+@router.callback_query(ExchangeStates.waiting_amount_mode, F.data.in_({"mode_send", "mode_receive"}), IsNotFiat())
+async def choose_amount_mode(callback: CallbackQuery, state: FSMContext):
+    await callback.answer()
+    mode = "send" if callback.data == "mode_send" else "receive"
+    await state.update_data(amount_mode=mode)
+    data = await state.get_data()
+
+    limits = await get_pair_limits(
+        data["currency_from"],
+        data["network_from"],
+        data["currency_to"],
+        data["network_to"],
+        reverse=(mode == "receive"),
+    )
+    await state.update_data(
+        min_amount=limits["min"],
+        max_amount=limits["max"],
+        min_amount_source=limits["source"],
+    )
+    await state.set_state(ExchangeStates.waiting_amount)
+
+    min_amount = format_limit_amount(limits["min"])
+    min_label = "Current minimum" if limits["source"] == "api" else "Configured minimum"
+
+    if mode == "receive":
+        amount_label = data["label_to"]
+        ticker = data["currency_to"].upper()
+        prompt = (
+            f"Enter the amount of <b>{amount_label}</b> you want to <b>receive</b>:\n"
+            f"<i>{min_label}: {min_amount} {ticker}</i>\n\n"
+            f"<i>Type /cancel to abort</i>"
+        )
     else:
-        await state.set_state(ExchangeStates.waiting_amount_receive)
-        
-        try:
-            await callback.message.edit_text(
-                f"✅ Sending: <b>{data['label_from']}</b>\n\n"
-                f"Enter the amount in <b>{currency['label']}</b>:\n"
-                f"<i>You'll send the calculated {data['label_from']} amount</i>\n\n"
-                f"<i>Type /cancel to abort</i>",
-                reply_markup=cancel_keyboard(lang)
-            )
-        except TelegramBadRequest as e:
-            if "message is not modified" not in str(e):
-                raise
+        amount_label = data["label_from"]
+        ticker = data["currency_from"].upper()
+        prompt = (
+            f"Enter the amount of <b>{amount_label}</b> you want to <b>send</b>:\n"
+            f"<i>{min_label}: {min_amount} {ticker}</i>\n\n"
+            f"<i>Type /cancel to abort</i>"
+        )
+
+    await callback.message.edit_text(prompt, reply_markup=exchange_cancel_keyboard())
 
 
-@router.message(ExchangeStates.waiting_amount_send, IsNotFiat())
-async def enter_amount_send(message: Message, state: FSMContext):
-    lang = await get_user_lang(message.from_user.id)
+# ---------------------------------------------------------------------------
+# Step 4 — Enter amount
+# ---------------------------------------------------------------------------
+
+@router.message(ExchangeStates.waiting_amount, IsNotFiat())
+async def enter_amount(message: Message, state: FSMContext):
     data = await state.get_data()
     if not data.get("currency_from"):
         return
@@ -336,24 +315,41 @@ async def enter_amount_send(message: Message, state: FSMContext):
             raise ValueError
     except ValueError:
         await message.answer(
-            "⚠️ Enter a valid amount.\n<i>Type /cancel to abort</i>",
-            reply_markup=cancel_keyboard(lang)
+            "⚠️ Enter a valid positive number.\n<i>Type /cancel to abort</i>",
+            reply_markup=exchange_cancel_keyboard()
         )
         return
 
-    min_amount = await get_min_amount(data["currency_from"], data["network_from"])
-    
-    if amount < min_amount:
+    mode = data.get("amount_mode", "send")
+
+    # Use limits already fetched and cached in choose_amount_mode step
+    min_amount = data.get("min_amount") or 0.0
+    max_amount = data.get("max_amount")
+    min_label = "Current minimum" if data.get("min_amount_source") == "api" else "Configured minimum"
+
+    if mode == "receive":
+        ticker = data["currency_to"].upper()
+    else:
+        ticker = data["currency_from"].upper()
+
+    if min_amount and amount < min_amount:
         await message.answer(
             f"⚠️ Amount too small.\n\n"
-            f"Minimum for <b>{data['label_from']}</b>: "
-            f"<b>{min_amount} {data['currency_from'].upper()}</b>\n\n"
+            f"{min_label}: <b>{format_limit_amount(min_amount)} {ticker}</b>\n\n"
             f"Please enter a higher amount.\n<i>Type /cancel to abort</i>",
-            reply_markup=cancel_keyboard(lang)
+            reply_markup=exchange_cancel_keyboard()
         )
         return
 
-    await state.update_data(amount=amount, previous_state=ExchangeStates.waiting_amount_send)
+    if max_amount is not None and amount > max_amount:
+        await message.answer(
+            f"⚠️ Amount too large.\n\n"
+            f"Maximum: <b>{format_limit_amount(max_amount)} {ticker}</b>\n\n"
+            f"Please enter a lower amount.\n<i>Type /cancel to abort</i>",
+            reply_markup=exchange_cancel_keyboard()
+        )
+        return
+
     msg = await message.answer("⏳ Fetching quote...")
 
     estimated_resp = await simpleswap.get_estimated(
@@ -361,130 +357,112 @@ async def enter_amount_send(message: Message, state: FSMContext):
         network_from=data["network_from"],
         ticker_to=data["currency_to"],
         network_to=data["network_to"],
-        amount=str(amount)
+        amount=str(amount),
+        reverse=(mode == "receive"),
     )
 
     if not estimated_resp:
         await msg.edit_text(
             f"❌ <b>Could not get a quote.</b>\n\n"
-            f"Possible reasons:\n"
-            f"• Amount is too small (min: {min_amount} {data['currency_from'].upper()})\n"
-            f"• Pair temporarily unavailable\n"
-            f"• API issue\n\n"
-            f"Try a different amount.\n<i>Type /cancel to abort</i>",
-            reply_markup=cancel_keyboard(lang)
+            f"This pair may be temporarily unavailable or the amount is outside the supported range. "
+            f"Please try a different amount or check back later.\n"
+            f"<i>Type /cancel to abort</i>",
+            reply_markup=exchange_cancel_keyboard()
         )
         return
 
-    await state.update_data(amount_to=estimated_resp["estimatedAmountTo"])
+    if mode == "receive":
+        amount_to_send = estimated_resp.get("estimatedAmountFrom")
+        amount_to_receive = amount
+        if amount_to_send is None:
+            await msg.edit_text(
+                f"❌ <b>Could not calculate the required send amount.</b>\n\n"
+                f"Please try again or choose a different pair.\n"
+                f"<i>Type /cancel to abort</i>",
+                reply_markup=exchange_cancel_keyboard()
+            )
+            return
+        await state.update_data(
+            amount=amount_to_send,
+            amount_to=amount_to_receive,
+            rate_id=estimated_resp.get("rateId"),
+        )
+        send_str = f"≈{amount_to_send} {data['label_from']}"
+        receive_str = f"{amount_to_receive} {data['label_to']}"
+    else:
+        await state.update_data(
+            amount=amount,
+            amount_to=estimated_resp["estimatedAmountTo"],
+            rate_id=estimated_resp.get("rateId"),
+        )
+        send_str = f"{amount} {data['label_from']}"
+        receive_str = f"≈{estimated_resp['estimatedAmountTo']} {data['label_to']}"
+
     await state.set_state(ExchangeStates.waiting_address)
 
-    try:
-        await msg.edit_text(
-            f"💱 <b>Quote:</b>\n\n"
-            f"You send: <b>{amount} {data['label_from']}</b>\n"
-            f"You receive: <b>≈{estimated_resp['estimatedAmountTo']} {data['label_to']}</b>\n\n"
-            f"Enter destination wallet address for <b>{data['label_to']}</b>:\n\n"
-            f"<i>Type /cancel to abort</i>",
-            reply_markup=cancel_keyboard(lang)
-        )
-    except TelegramBadRequest:
-        pass
-
-
-@router.message(ExchangeStates.waiting_amount_receive, IsNotFiat())
-async def enter_amount_receive(message: Message, state: FSMContext):
-    lang = await get_user_lang(message.from_user.id)
-    data = await state.get_data()
-    if not data.get("currency_from"):
-        return
-
-    try:
-        amount_str = message.text.replace(",", ".")
-        amount = float(amount_str)
-        if amount <= 0:
-            raise ValueError
-    except ValueError:
-        await message.answer(
-            "⚠️ Enter a valid amount.\n<i>Type /cancel to abort</i>",
-            reply_markup=cancel_keyboard(lang)
-        )
-        return
-
-    await state.update_data(amount_to=amount, previous_state=ExchangeStates.waiting_amount_receive)
-    msg = await message.answer("⏳ Fetching quote...")
-
-    reverse_resp = await simpleswap.get_estimated_reverse(
-        ticker_from=data["currency_from"],
-        network_from=data["network_from"],
-        ticker_to=data["currency_to"],
-        network_to=data["network_to"],
-        amount=str(amount)
+    await msg.edit_text(
+        f"💱 <b>Quote:</b>\n\n"
+        f"You send: <b>{send_str}</b>\n"
+        f"You receive: <b>{receive_str}</b>\n\n"
+        f"Enter destination wallet address for <b>{data['label_to']}</b>:\n\n"
+        f"<i>Type /cancel to abort</i>",
+        reply_markup=exchange_cancel_keyboard()
     )
 
-    if not reverse_resp:
-        await msg.edit_text(
-            f"❌ <b>Could not get a quote.</b>\n\n"
-            f"Possible reasons:\n"
-            f"• Amount is too high/low\n"
-            f"• Pair temporarily unavailable\n"
-            f"• API issue\n\n"
-            f"Try a different amount.\n<i>Type /cancel to abort</i>",
-            reply_markup=cancel_keyboard(lang)
-        )
-        return
 
-    amount_from = reverse_resp.get("estimatedAmountFrom")
-    await state.update_data(amount=amount_from)
-    await state.set_state(ExchangeStates.waiting_address)
-
-    try:
-        await msg.edit_text(
-            f"💱 <b>Quote:</b>\n\n"
-            f"You send: <b>{amount_from} {data['label_from']}</b>\n"
-            f"You receive: <b>≈{amount} {data['label_to']}</b>\n\n"
-            f"Enter destination wallet address for <b>{data['label_to']}</b>:\n\n"
-            f"<i>Type /cancel to abort</i>",
-            reply_markup=cancel_keyboard(lang)
-        )
-    except TelegramBadRequest:
-        pass
-
+# ---------------------------------------------------------------------------
+# Step 5 — Enter address
+# ---------------------------------------------------------------------------
 
 @router.message(ExchangeStates.waiting_address, IsNotFiat())
 async def enter_address(message: Message, state: FSMContext):
-    lang = await get_user_lang(message.from_user.id)
     address = message.text.strip()
     data = await state.get_data()
     currency_to = data.get("currency_to", "")
-    min_len = ADDRESS_MIN_LENGTH.get(currency_to, 10)
 
-    if len(address) < min_len:
+    is_valid, error = await validate_wallet_address(
+        address=address,
+        ticker=currency_to,
+        network=data.get("network_to", ""),
+        label=data.get("label_to", currency_to.upper()),
+    )
+    if not is_valid:
         await message.answer(
-            f"⚠️ Address too short for <b>{data.get('label_to', currency_to)}</b>.\n"
-            f"Minimum {min_len} characters, you entered {len(address)}.\n\n"
-            f"<i>Type /cancel to abort</i>",
-            reply_markup=cancel_keyboard(lang)
+            f"{error}\n\n<i>Type /cancel to abort</i>",
+            reply_markup=exchange_cancel_keyboard()
         )
         return
 
-    await state.update_data(address_to=address, previous_state=ExchangeStates.waiting_address)
+    await state.update_data(address_to=address)
     await state.set_state(ExchangeStates.confirm)
+
+    mode = data.get("amount_mode", "send")
+    amount = data.get("amount")
+    amount_to = data.get("amount_to")
+    if mode == "receive":
+        send_str = f"≈{amount} {data['label_from']}"
+        receive_str = f"{amount_to} {data['label_to']}"
+    else:
+        send_str = f"{amount} {data['label_from']}"
+        receive_str = f"≈{amount_to} {data['label_to']}"
 
     await message.answer(
         f"📋 <b>Confirm swap:</b>\n\n"
-        f"You send: <b>{data['amount']} {data['label_from']}</b>\n"
-        f"You receive: <b>≈{data['amount_to']} {data['label_to']}</b>\n"
+        f"You send: <b>{send_str}</b>\n"
+        f"You receive: <b>{receive_str}</b>\n"
         f"Address: <code>{address}</code>\n\n"
         f"Everything correct?",
-        reply_markup=confirm_keyboard(lang)
+        reply_markup=confirm_keyboard()
     )
 
+
+# ---------------------------------------------------------------------------
+# Step 6 — Confirm
+# ---------------------------------------------------------------------------
 
 @router.callback_query(ExchangeStates.confirm, F.data == "confirm_yes", IsNotFiat())
 async def confirm_exchange(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
-    lang = await get_user_lang(callback.from_user.id)
     data = await state.get_data()
 
     await callback.message.edit_text("⏳ Creating exchange...")
@@ -495,19 +473,22 @@ async def confirm_exchange(callback: CallbackQuery, state: FSMContext):
         ticker_to=data["currency_to"],
         network_to=data["network_to"],
         amount=str(data["amount"]),
-        address_to=data["address_to"]
+        address_to=data["address_to"],
+        rate_id=data.get("rate_id")
     )
 
     if not result:
         await callback.message.edit_text(
             "❌ Failed to create exchange. Please try again later.",
-            reply_markup=back_to_menu(lang)
+            reply_markup=back_to_menu()
         )
         await state.clear()
         return
 
     exchange_id = result.get("id") or result.get("exchangeId")
     address_from = result.get("addressFrom") or result.get("address_from")
+    payment_url = result.get("redirectUrl") or result.get("paymentUrl") or result.get("redirect_url")
+    status = result.get("status") or "waiting"
 
     await save_swap(
         user_id=callback.from_user.id,
@@ -516,13 +497,15 @@ async def confirm_exchange(callback: CallbackQuery, state: FSMContext):
         currency_to=f"{data['currency_to']}_{data['network_to']}",
         amount_from=data["amount"],
         amount_to=data["amount_to"],
-        address_to=data["address_to"]
+        address_to=data["address_to"],
+        address_from=address_from,
+        payment_url=payment_url,
+        status=status,
     )
 
     if PRIVATE_CHANNEL_ID:
         try:
-            channel_id = int(PRIVATE_CHANNEL_ID) 
-            
+            channel_id = int(PRIVATE_CHANNEL_ID)
             text = (
                 f"🆕 <b>New Exchange Created</b>\n\n"
                 f"🆔 <code>{exchange_id}</code>\n"
@@ -531,33 +514,38 @@ async def confirm_exchange(callback: CallbackQuery, state: FSMContext):
                 f"💰 Amount: <b>{data['amount']} {data['currency_from'].upper()}</b>\n"
                 f"📊 Status: <b>waiting</b>"
             )
-            
             logger.info(f"DEBUG CHANNEL: PRIVATE_CHANNEL_ID='{PRIVATE_CHANNEL_ID}' type={type(PRIVATE_CHANNEL_ID)}")
             await callback.bot.send_message(chat_id=channel_id, text=text, parse_mode="HTML")
             logger.info(f"Successfully sent log to channel {channel_id}")
-            
         except Exception as e:
             logger.error(f"Channel post error: {e}")
 
     limiter.record(callback.from_user.id)
     await state.clear()
 
+    swap_details = {
+        "exchange_id": exchange_id,
+        "status": status,
+        "currency_from": f"{data['currency_from']}_{data['network_from']}",
+        "currency_to": f"{data['currency_to']}_{data['network_to']}",
+        "amount_from": data["amount"],
+        "amount_to": data["amount_to"],
+        "address_to": data["address_to"],
+        "address_from": address_from,
+        "payment_url": payment_url,
+    }
+
     await callback.message.edit_text(
-        f"✅ <b>Exchange created!</b>\n\n"
-        f"ID: <code>{exchange_id}</code>\n"
-        f"Send <b>{data['amount']} {data['label_from']}</b> to:\n"
-        f"<code>{address_from}</code>\n\n"
-        f"Check status: /status_{exchange_id}",
-        reply_markup=back_to_menu(lang)
+        format_payment_details(swap_details),
+        reply_markup=payment_details_keyboard(exchange_id, payment_url)
     )
 
 
 @router.callback_query(ExchangeStates.confirm, F.data == "confirm_no", IsNotFiat())
 async def cancel_exchange(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
-    lang = await get_user_lang(callback.from_user.id)
     await state.clear()
     await callback.message.edit_text(
         "❌ Exchange cancelled.",
-        reply_markup=back_to_menu(lang)
+        reply_markup=back_to_menu()
     )

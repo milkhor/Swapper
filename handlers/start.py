@@ -4,24 +4,38 @@ from aiogram.filters import CommandStart
 from aiogram.fsm.context import FSMContext
 
 from keyboards.inline import main_menu, back_to_menu
-from database.db import get_user_lang, ensure_user_registered, get_user_rank
+from database.db import get_user_lang, ensure_user_registered, get_user_rank, get_user_swaps
 from services.i18n import t
+from services.order_details import is_payment_active
 from services.prices import get_prices, format_prices
 
 router = Router()
 
+async def _active_orders_notice(user_id: int) -> str:
+    """Return a notice string if user has active (waiting) orders, else empty string."""
+    try:
+        swaps = await get_user_swaps(user_id)
+        active = [s for s in swaps if is_payment_active(s.get("status"))]
+        if active:
+            count = len(active)
+            label = "order" if count == 1 else "orders"
+            return f"\n\n⚠️ You have <b>{count} active {label}</b> awaiting payment. Tap 📜 My History to view payment details."
+    except Exception:
+        pass
+    return ""
+
+
 @router.message(CommandStart())
 async def cmd_start(message: Message):
     user_id = message.from_user.id
-    # ✅ Регистрация пользователя в БД
     await ensure_user_registered(user_id)
-    
+
     lang = await get_user_lang(user_id)
-    # ✅ Получаем ранг
     emoji, rank_name, swap_count = await get_user_rank(user_id)
-    
-    welcome_text = f"{t(lang, 'welcome')}\n\n{emoji} <b>Rank:</b> {rank_name} ({swap_count} swaps)"
-    
+    notice = await _active_orders_notice(user_id)
+
+    welcome_text = f"{t(lang, 'welcome')}\n\n{emoji} <b>Rank:</b> {rank_name} ({swap_count} swaps){notice}"
+
     await message.answer(
         text=welcome_text,
         reply_markup=main_menu(lang)
@@ -53,9 +67,11 @@ async def callback_how(callback: CallbackQuery):
 async def callback_back(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
     await state.clear()
-    lang = await get_user_lang(callback.from_user.id)
+    user_id = callback.from_user.id
+    lang = await get_user_lang(user_id)
+    notice = await _active_orders_notice(user_id)
     await callback.message.edit_text(
-        text=t(lang, "welcome"),
+        text=f"{t(lang, 'welcome')}{notice}",
         reply_markup=main_menu(lang)
     )
 
@@ -64,9 +80,11 @@ async def callback_back(callback: CallbackQuery, state: FSMContext):
 async def callback_menu(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
     await state.clear()
-    lang = await get_user_lang(callback.from_user.id)
+    user_id = callback.from_user.id
+    lang = await get_user_lang(user_id)
+    notice = await _active_orders_notice(user_id)
     await callback.message.answer(
-        text=t(lang, "welcome"),
+        text=f"{t(lang, 'welcome')}{notice}",
         reply_markup=main_menu(lang)
     )
 
