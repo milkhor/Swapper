@@ -92,6 +92,9 @@ async def get_estimated(
         t_to = ticker_to.lower()
         n_to = network_to.lower() if network_to else ""
 
+        if reverse:
+            fixed = True
+
         params = {
             "tickerFrom": t_from,
             "networkFrom": n_from,
@@ -207,6 +210,9 @@ async def get_exchange_ranges(
     fixed: bool = False,
     reverse: bool = False,
 ) -> dict | None:
+    if reverse:
+        fixed = True
+
     params = {
         "tickerFrom": ticker_from.lower(),
         "networkFrom": network_from.lower() if network_from else "",
@@ -237,16 +243,24 @@ async def get_exchange_ranges(
 
 
 async def get_exchange(public_id: str) -> dict | None:
-    data = await _request_with_retry(
-        "GET",
-        f"{BASE_URL}/v3/exchanges/{public_id}",
-        headers={"x-api-key": SIMPLESWAP_API_KEY},
-    )
-
-    if not data:
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(
+                f"{BASE_URL}/v3/exchanges/{public_id}",
+                headers={"x-api-key": SIMPLESWAP_API_KEY},
+                timeout=10,
+            )
+            if resp.status_code == 404:
+                return {"status": "expired"}
+            resp.raise_for_status()
+            data = resp.json()
+    except httpx.HTTPStatusError as e:
+        logger.error(f"[API] HTTP {e.response.status_code} — {BASE_URL}/v3/exchanges/{public_id} | body: {e.response.text[:200]}")
+        return None
+    except Exception as e:
+        logger.error(f"get_exchange error: {e}")
         return None
 
     if isinstance(data, dict) and isinstance(data.get("result"), dict):
         return data["result"]
-
     return data

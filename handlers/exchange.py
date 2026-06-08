@@ -467,6 +467,7 @@ async def confirm_exchange(callback: CallbackQuery, state: FSMContext):
 
     await callback.message.edit_text("⏳ Creating exchange...")
 
+    is_receive_mode = data.get("amount_mode") == "receive"
     result = await simpleswap.create_exchange(
         ticker_from=data["currency_from"],
         network_from=data["network_from"],
@@ -474,6 +475,7 @@ async def confirm_exchange(callback: CallbackQuery, state: FSMContext):
         network_to=data["network_to"],
         amount=str(data["amount"]),
         address_to=data["address_to"],
+        fixed=is_receive_mode,
         rate_id=data.get("rate_id")
     )
 
