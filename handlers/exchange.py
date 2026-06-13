@@ -471,12 +471,17 @@ async def confirm_exchange(callback: CallbackQuery, state: FSMContext):
 
     # Refresh estimate right before creating the exchange to avoid using an expired rateId
     try:
+        # For receive mode, `data['amount']` stores the calculated amount to send.
+        # Need to pass the original requested receive amount (amount_to) as `amount` when reverse=True.
+        est_amount = data.get("amount_to") if is_receive_mode else data.get("amount")
+        if est_amount is None:
+            est_amount = data.get("amount")
         fresh_est = await simpleswap.get_estimated(
             ticker_from=data["currency_from"],
             network_from=data["network_from"],
             ticker_to=data["currency_to"],
             network_to=data["network_to"],
-            amount=str(data["amount"]),
+            amount=str(est_amount),
             reverse=is_receive_mode,
         )
     except Exception as e:
