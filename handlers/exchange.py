@@ -468,6 +468,27 @@ async def confirm_exchange(callback: CallbackQuery, state: FSMContext):
     await callback.message.edit_text("⏳ Creating exchange...")
 
     is_receive_mode = data.get("amount_mode") == "receive"
+
+    # Refresh estimate right before creating the exchange to avoid using an expired rateId
+    try:
+        fresh_est = await simpleswap.get_estimated(
+            ticker_from=data["currency_from"],
+            network_from=data["network_from"],
+            ticker_to=data["currency_to"],
+            network_to=data["network_to"],
+            amount=str(data["amount"]),
+            reverse=is_receive_mode,
+        )
+    except Exception as e:
+        logger.warning(f"Could not refresh estimate before create: {e}")
+        fresh_est = None
+
+    rate_id_to_use = None
+    if fresh_est and fresh_est.get("rateId"):
+        rate_id_to_use = fresh_est.get("rateId")
+    else:
+        rate_id_to_use = data.get("rate_id")
+
     result = await simpleswap.create_exchange(
         ticker_from=data["currency_from"],
         network_from=data["network_from"],
@@ -476,7 +497,7 @@ async def confirm_exchange(callback: CallbackQuery, state: FSMContext):
         amount=str(data["amount"]),
         address_to=data["address_to"],
         fixed=is_receive_mode,
-        rate_id=data.get("rate_id")
+        rate_id=rate_id_to_use
     )
 
     if not result:
