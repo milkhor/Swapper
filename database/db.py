@@ -4,7 +4,9 @@ import os
 from datetime import datetime, timedelta
 
 logger = logging.getLogger(__name__)
-DB_PATH = "swaps.db"
+# Configurable so it can point at a persistent Railway volume (e.g.
+# DB_PATH=/data/swaps.db). Defaults to a local file for dev.
+DB_PATH = os.getenv("DB_PATH", "swaps.db")
 
 
 # ── Init ───────────────────────────────────────────────────────────────────────
@@ -15,7 +17,10 @@ async def init_db():
             CREATE TABLE IF NOT EXISTS swaps (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_id INTEGER NOT NULL,
+                username TEXT,
+                language_code TEXT,
                 exchange_id TEXT,
+                order_token TEXT,
                 currency_from TEXT,
                 currency_to TEXT,
                 amount_from REAL,
@@ -57,6 +62,17 @@ async def init_db():
                 reason TEXT DEFAULT ''
             )
         """)
+        # Audit log of administrative access to / export of customer records
+        # (FixedFloat compliance requirement #4).
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS admin_access_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                admin_id INTEGER NOT NULL,
+                action TEXT NOT NULL,
+                target TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
         await db.commit()
 
         # Migrate: add columns if they don't exist yet
@@ -78,6 +94,9 @@ async def init_db():
         swap_migrations = [
             ("address_from", "TEXT"),
             ("payment_url", "TEXT"),
+            ("username", "TEXT"),
+            ("language_code", "TEXT"),
+            ("order_token", "TEXT"),
         ]
         for col_name, col_type in swap_migrations:
             try:
@@ -85,6 +104,15 @@ async def init_db():
                 await db.commit()
             except Exception:
                 pass  # column already exists
+
+        # Index for fast lookup of the Telegram user record by provider order ID.
+        try:
+            await db.execute(
+                "CREATE INDEX IF NOT EXISTS idx_swaps_exchange_id ON swaps(exchange_id)"
+            )
+            await db.commit()
+        except Exception:
+            pass
 
         cursor = await db.execute("SELECT COUNT(*) FROM currencies")
         count = (await cursor.fetchone())[0]
@@ -237,15 +265,20 @@ async def save_swap(user_id: int, exchange_id: str, currency_from: str,
                     currency_to: str, amount_from: float, amount_to: float,
                     address_to: str, address_from: str | None = None,
                     payment_url: str | None = None,
-                    status: str = "waiting") -> int:
+                    status: str = "waiting",
+                    username: str | None = None,
+                    language_code: str | None = None,
+                    order_token: str | None = None) -> int:
     async with aiosqlite.connect(DB_PATH) as db:
         cursor = await db.execute("""
             INSERT INTO swaps
-                (user_id, exchange_id, currency_from, currency_to,
+                (user_id, username, language_code, exchange_id, order_token,
+                 currency_from, currency_to,
                  amount_from, amount_to, address_to, address_from,
                  payment_url, status)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (user_id, exchange_id, currency_from, currency_to,
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (user_id, username, language_code, exchange_id, order_token,
+              currency_from, currency_to,
               amount_from, amount_to, address_to, address_from,
               payment_url, status))
         await db.commit()
@@ -353,10 +386,32 @@ async def get_swap_by_exchange_id(exchange_id: str) -> dict | None:
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         cursor = await db.execute(
-            "SELECT * FROM swaps WHERE exchange_id = ?", (exchange_id,)
+            "SELECT * FROM swaps WHERE exchange_id = ?", (exchange_id.strip(),)
         )
         row = await cursor.fetchone()
         return dict(row) if row else None
+
+
+# ── Admin access audit ───────────────────────────────────────────────────────
+
+async def log_admin_access(admin_id: int, action: str, target: str | None = None):
+    """Record administrative access to / export of customer records."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "INSERT INTO admin_access_log (admin_id, action, target) VALUES (?, ?, ?)",
+            (admin_id, action, target)
+        )
+        await db.commit()
+
+
+async def get_admin_access_log(limit: int = 30) -> list:
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            "SELECT * FROM admin_access_log ORDER BY id DESC LIMIT ?", (limit,)
+        )
+        rows = await cursor.fetchall()
+        return [dict(r) for r in rows]
 
 
 # ── Stats ──────────────────────────────────────────────────────────────────────

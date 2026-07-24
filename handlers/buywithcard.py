@@ -227,6 +227,8 @@ async def confirm_fiat_exchange(callback: CallbackQuery, state: FSMContext):
 
     await save_swap(
         user_id=callback.from_user.id,
+        username=callback.from_user.username,
+        language_code=callback.from_user.language_code,
         exchange_id=exchange_id,
         currency_from=f"{data['currency_from']}_{data['network_from']}",
         currency_to=f"{data['currency_to']}_{data['network_to']}",

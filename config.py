@@ -4,7 +4,10 @@ import os
 load_dotenv()
 
 BOT_TOKEN          = os.getenv("BOT_TOKEN")
-SIMPLESWAP_API_KEY = os.getenv("SIMPLESWAP_API_KEY")
+SIMPLESWAP_API_KEY = os.getenv("SIMPLESWAP_API_KEY")  # legacy — still used by hidden "buy with card" flow
+# FixedFloat (ff.io) — primary crypto exchange provider
+FIXEDFLOAT_API_KEY    = os.getenv("FIXEDFLOAT_API_KEY", "")
+FIXEDFLOAT_API_SECRET = os.getenv("FIXEDFLOAT_API_SECRET", "")
 ADMIN_ID           = int(os.getenv("ADMIN_ID", "0"))
 
 # Webhook

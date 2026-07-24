@@ -3,7 +3,7 @@ from aiogram.types import Message
 from aiogram.filters import Command
 from html import escape
 
-from services.simpleswap import get_exchange
+from services.fixedfloat import get_exchange
 from database.db import (
     get_user_swaps,
     update_swap_payment_details,
@@ -41,24 +41,31 @@ async def cmd_status(message: Message):
 
     await message.answer("⏳ Checking status...")
 
-    result = await get_exchange(exchange_id)
+    # FixedFloat needs the per-order token, which we only have for our own stored
+    # orders — so look the order up locally first.
+    swap = await get_swap_by_exchange_id(exchange_id)
 
-    if not result:
+    result = await get_exchange(exchange_id, swap.get("order_token") if swap else None)
+
+    if not result and not swap:
         await message.answer("❌ Exchange not found. Check the ID and try again.")
         return
 
-    status = result.get("status", "unknown")
-    address_from, payment_url = extract_payment_details(result)
+    if result:
+        status = result.get("status", "unknown")
+        address_from, payment_url = extract_payment_details(result)
 
-    await update_swap_payment_details(
-        exchange_id,
-        address_from=address_from,
-        payment_url=payment_url,
-        status=status,
-    )
+        await update_swap_payment_details(
+            exchange_id,
+            address_from=address_from,
+            payment_url=payment_url,
+            status=status,
+        )
+        swap = await get_swap_by_exchange_id(exchange_id)
 
-    swap = await get_swap_by_exchange_id(exchange_id)
     if not swap:
+        status = result.get("status", "unknown")
+        address_from, payment_url = extract_payment_details(result)
         ticker_from = result.get("tickerFrom") or result.get("currency_from", "—")
         ticker_to = result.get("tickerTo") or result.get("currency_to", "—")
         network_from = result.get("networkFrom") or result.get("network_from")

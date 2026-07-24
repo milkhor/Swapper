@@ -3,7 +3,7 @@ import logging
 from aiogram import Bot
 
 from database.db import get_active_swaps, update_swap_status, update_swap_payment_details
-from services.simpleswap import get_exchange
+from services.fixedfloat import get_exchange
 from services.order_details import extract_payment_details
 from config import PUBLIC_CHANNEL_ID, PRIVATE_CHANNEL_ID # Добавили импорты
 
@@ -36,7 +36,7 @@ async def check_swaps(bot: Bot):
 
             for swap in swaps:
                 try:
-                    result = await get_exchange(swap["exchange_id"])
+                    result = await get_exchange(swap["exchange_id"], swap.get("order_token"))
                     if not result:
                         continue
 
