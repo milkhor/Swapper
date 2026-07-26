@@ -12,6 +12,17 @@ DB_PATH = os.getenv("DB_PATH", "swaps.db")
 # ── Init ───────────────────────────────────────────────────────────────────────
 
 async def init_db():
+    # DB_PATH may point into a mounted volume (e.g. /data/swaps.db); make sure the
+    # directory exists so the first boot doesn't fail on "unable to open database".
+    parent = os.path.dirname(DB_PATH)
+    if parent:
+        try:
+            os.makedirs(parent, exist_ok=True)
+        except OSError as e:
+            logger.error(f"Could not create DB directory {parent}: {e}")
+
+    logger.info(f"Using database at {DB_PATH}")
+
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute("""
             CREATE TABLE IF NOT EXISTS swaps (
