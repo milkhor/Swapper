@@ -102,6 +102,22 @@ async def init_db():
             try:
                 await db.execute(f"ALTER TABLE swaps ADD COLUMN {col_name} {col_type}")
                 await db.commit()
+                if col_name == "order_token":
+                    # First run after the FixedFloat migration: orders created with
+                    # the previous provider have no token, so the new checker can
+                    # never resolve them. Close them out instead of polling forever.
+                    # (Records are kept — only the status label changes.)
+                    cur = await db.execute("""
+                        UPDATE swaps SET status = 'expired'
+                        WHERE order_token IS NULL
+                          AND status NOT IN ('finished', 'failed', 'refunded', 'expired')
+                    """)
+                    await db.commit()
+                    if cur.rowcount:
+                        logger.info(
+                            f"Marked {cur.rowcount} pre-FixedFloat order(s) as expired "
+                            f"(no order token — not trackable with the new provider)"
+                        )
             except Exception:
                 pass  # column already exists
 
