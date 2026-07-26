@@ -36,7 +36,12 @@ async def check_swaps(bot: Bot):
 
             for swap in swaps:
                 try:
-                    result = await get_exchange(swap["exchange_id"], swap.get("order_token"))
+                    # Orders without a token predate the FixedFloat migration and
+                    # cannot be queried — skip instead of hitting the API each cycle.
+                    if not swap.get("order_token"):
+                        continue
+
+                    result = await get_exchange(swap["exchange_id"], swap["order_token"])
                     if not result:
                         continue
 

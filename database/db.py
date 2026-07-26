@@ -4,14 +4,49 @@ import os
 from datetime import datetime, timedelta
 
 logger = logging.getLogger(__name__)
-# Configurable so it can point at a persistent Railway volume (e.g.
-# DB_PATH=/data/swaps.db). Defaults to a local file for dev.
-DB_PATH = os.getenv("DB_PATH", "swaps.db")
+
+
+def _resolve_db_path() -> str:
+    """
+    Where the SQLite file lives, in priority order:
+      1. DB_PATH                      — explicit override
+      2. $RAILWAY_VOLUME_MOUNT_PATH   — set automatically when a Railway volume
+                                        is attached, so persistence works with
+                                        no manual configuration
+      3. ./swaps.db                   — local dev (ephemeral on Railway!)
+    """
+    explicit = os.getenv("DB_PATH")
+    if explicit:
+        return explicit
+    volume = os.getenv("RAILWAY_VOLUME_MOUNT_PATH")
+    if volume:
+        return os.path.join(volume, "swaps.db")
+    return "swaps.db"
+
+
+DB_PATH = _resolve_db_path()
 
 
 # ── Init ───────────────────────────────────────────────────────────────────────
 
 async def init_db():
+    # DB_PATH may point into a mounted volume (e.g. /data/swaps.db); make sure the
+    # directory exists so the first boot doesn't fail on "unable to open database".
+    parent = os.path.dirname(DB_PATH)
+    if parent:
+        try:
+            os.makedirs(parent, exist_ok=True)
+        except OSError as e:
+            logger.error(f"Could not create DB directory {parent}: {e}")
+
+    logger.info(f"Using database at {os.path.abspath(DB_PATH)}")
+    if not os.getenv("DB_PATH") and not os.getenv("RAILWAY_VOLUME_MOUNT_PATH"):
+        logger.warning(
+            "No DB_PATH or Railway volume configured — the database is EPHEMERAL "
+            "and will be wiped on every redeploy. Attach a volume to retain "
+            "transaction records (required for the 1-year retention policy)."
+        )
+
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute("""
             CREATE TABLE IF NOT EXISTS swaps (
@@ -102,6 +137,22 @@ async def init_db():
             try:
                 await db.execute(f"ALTER TABLE swaps ADD COLUMN {col_name} {col_type}")
                 await db.commit()
+                if col_name == "order_token":
+                    # First run after the FixedFloat migration: orders created with
+                    # the previous provider have no token, so the new checker can
+                    # never resolve them. Close them out instead of polling forever.
+                    # (Records are kept — only the status label changes.)
+                    cur = await db.execute("""
+                        UPDATE swaps SET status = 'expired'
+                        WHERE order_token IS NULL
+                          AND status NOT IN ('finished', 'failed', 'refunded', 'expired')
+                    """)
+                    await db.commit()
+                    if cur.rowcount:
+                        logger.info(
+                            f"Marked {cur.rowcount} pre-FixedFloat order(s) as expired "
+                            f"(no order token — not trackable with the new provider)"
+                        )
             except Exception:
                 pass  # column already exists
 

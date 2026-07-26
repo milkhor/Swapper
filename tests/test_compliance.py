@@ -161,3 +161,44 @@ async def test_migration_adds_columns_to_legacy_db(tmp_path, monkeypatch):
     rec = await db.get_swap_by_exchange_id("OLD_ORDER")
     assert rec is not None and rec["user_id"] == 777
     assert rec["username"] is None  # backfilled as NULL
+
+
+async def test_pre_migration_active_orders_are_closed_out(tmp_path, monkeypatch):
+    """Legacy orders have no FF token, so they must not be polled forever."""
+    path = str(tmp_path / "legacy2.db")
+    async with aiosqlite.connect(path) as c:
+        await c.execute("""
+            CREATE TABLE swaps (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                exchange_id TEXT,
+                currency_from TEXT,
+                currency_to TEXT,
+                amount_from REAL,
+                amount_to REAL,
+                address_to TEXT,
+                status TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        await c.executemany(
+            "INSERT INTO swaps (user_id, exchange_id, status) VALUES (?, ?, ?)",
+            [(1, "OLD_WAITING", "waiting"), (1, "OLD_DONE", "finished")],
+        )
+        await c.commit()
+
+    monkeypatch.setattr(db, "DB_PATH", path)
+    await db.init_db()
+
+    # Stale active order closed out; finished order untouched; records retained.
+    assert (await db.get_swap_by_exchange_id("OLD_WAITING"))["status"] == "expired"
+    assert (await db.get_swap_by_exchange_id("OLD_DONE"))["status"] == "finished"
+
+    # Idempotent: a later order that legitimately has a token stays active.
+    await db.save_swap(
+        user_id=1, exchange_id="NEW_ONE", order_token="tok",
+        currency_from="btc_btc", currency_to="eth_eth",
+        amount_from=1.0, amount_to=2.0, address_to="x", status="waiting",
+    )
+    await db.init_db()
+    assert (await db.get_swap_by_exchange_id("NEW_ONE"))["status"] == "waiting"
