@@ -21,7 +21,8 @@ from database.db import (
     update_currency_min, delete_currency,
     get_all_users, get_user_swap_history,
     is_user_blocked, block_user, unblock_user,
-    update_user_swaps_count  # Проверь, что добавил эту функцию в db.py
+    update_user_swaps_count,  # Проверь, что добавил эту функцию в db.py
+    get_swap_by_exchange_id, log_admin_access, get_admin_access_log
 )
 from config import ADMIN_ID
 
@@ -45,6 +46,8 @@ class AdminStates(StatesGroup):
     waiting_date_to      = State()
     # User lookup
     waiting_user_id      = State()
+    # Order/exchange ID lookup
+    waiting_order_id     = State()
     # Block
     waiting_block_id     = State()
     waiting_block_reason = State()
@@ -61,8 +64,10 @@ def admin_main_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="💰 Currencies",    callback_data="adm_currencies")],
         [InlineKeyboardButton(text="📋 Swaps",         callback_data="adm_swaps_menu")],
+        [InlineKeyboardButton(text="🔎 Find by Order ID", callback_data="adm_order_lookup")],
         [InlineKeyboardButton(text="👥 Users",         callback_data="adm_users_menu")],
         [InlineKeyboardButton(text="📈 Top pairs",     callback_data="adm_pairs")],
+        [InlineKeyboardButton(text="🛡 Access log",     callback_data="adm_access_log")],
         [InlineKeyboardButton(text="📋 Logs",          callback_data="adm_logs")],
     ])
 
@@ -375,14 +380,16 @@ async def cb_export_csv(callback: CallbackQuery):
 
     buf = io.StringIO()
     writer = csv.DictWriter(buf, fieldnames=[
-        "id", "user_id", "exchange_id",
+        "id", "user_id", "username", "language_code", "exchange_id",
         "currency_from", "currency_to",
         "amount_from", "amount_to",
         "address_to", "status", "created_at"
-    ])
+    ], extrasaction="ignore")
     writer.writeheader()
     writer.writerows(swaps)
     buf.seek(0)
+
+    await log_admin_access(callback.from_user.id, "export_csv", f"{label} ({len(swaps)} rows)")
 
     filename = f"swaps_{label}_{datetime.now().strftime('%Y%m%d_%H%M')}.csv"
     await callback.message.answer_document(
@@ -414,7 +421,7 @@ async def cb_export_xlsx(callback: CallbackQuery):
     ws = wb.active
     ws.title = "Swaps"
 
-    headers = ["ID", "User ID", "Exchange ID", "From", "To",
+    headers = ["ID", "User ID", "Username", "Language", "Exchange ID", "From", "To",
                "Amount From", "Amount To", "Address To", "Status", "Created At"]
     header_fill = PatternFill("solid", fgColor="1e1e2e")
     header_font = Font(bold=True, color="7c6af7")
@@ -425,7 +432,8 @@ async def cb_export_xlsx(callback: CallbackQuery):
         cell.fill      = header_fill
         cell.alignment = Alignment(horizontal="center")
 
-    fields = ["id", "user_id", "exchange_id", "currency_from", "currency_to",
+    fields = ["id", "user_id", "username", "language_code", "exchange_id",
+              "currency_from", "currency_to",
               "amount_from", "amount_to", "address_to", "status", "created_at"]
     for row_idx, swap in enumerate(swaps, 2):
         for col_idx, field in enumerate(fields, 1):
@@ -439,6 +447,8 @@ async def cb_export_xlsx(callback: CallbackQuery):
     buf = io.BytesIO()
     wb.save(buf)
     buf.seek(0)
+
+    await log_admin_access(callback.from_user.id, "export_xlsx", f"{label} ({len(swaps)} rows)")
 
     filename = f"swaps_{label}_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx"
     await callback.message.answer_document(
@@ -570,6 +580,121 @@ def _user_action_keyboard(user_id: int, is_blocked: bool) -> InlineKeyboardMarku
         [InlineKeyboardButton(text="⚙️ Manage Rank", callback_data=f"admin_manage_{user_id}")], # Добавил быстрый переход к рангам
         [InlineKeyboardButton(text="⬅️ Back", callback_data="adm_users_menu")],
     ])
+
+
+# ── Lookup by FixedFloat order / exchange ID ────────────────────────────────────
+
+@router.message(Command("admin_order"))
+async def cmd_admin_order(message: Message, state: FSMContext):
+    if not is_admin(message.from_user.id):
+        await message.answer("⛔ No access.")
+        return
+    parts = message.text.split(maxsplit=1)
+    if len(parts) == 2:
+        await _show_order_record(message, message.from_user.id, parts[1].strip())
+        return
+    await state.set_state(AdminStates.waiting_order_id)
+    await message.answer(
+        "🔎 <b>Find by Order ID</b>\n\n"
+        "Enter the FixedFloat order / exchange ID:\n\n"
+        "<i>/cancel to abort</i>"
+    )
+
+
+@router.callback_query(F.data == "adm_order_lookup")
+async def cb_order_lookup(callback: CallbackQuery, state: FSMContext):
+    if not is_admin(callback.from_user.id):
+        return
+    await callback.answer()
+    await state.set_state(AdminStates.waiting_order_id)
+    await callback.message.edit_text(
+        "🔎 <b>Find by Order ID</b>\n\n"
+        "Enter the FixedFloat order / exchange ID:\n\n"
+        "<i>/cancel to abort</i>"
+    )
+
+
+@router.message(AdminStates.waiting_order_id)
+async def process_order_lookup(message: Message, state: FSMContext):
+    if not is_admin(message.from_user.id):
+        return
+    order_id = message.text.strip()
+    await state.clear()
+    if not order_id:
+        await message.answer("⚠️ Empty ID. Try again or /cancel")
+        return
+    await _show_order_record(message, message.from_user.id, order_id)
+
+
+def _esc(value) -> str:
+    s = "" if value is None else str(value)
+    return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+async def _show_order_record(message: Message, admin_id: int, order_id: str):
+    swap = await get_swap_by_exchange_id(order_id)
+    # Always record the access attempt (compliance requirement #4).
+    await log_admin_access(
+        admin_id,
+        "order_lookup" if swap else "order_lookup_miss",
+        order_id,
+    )
+    if not swap:
+        await message.answer(
+            f"📭 No record found for order ID <code>{_esc(order_id)}</code>.",
+            reply_markup=admin_back_kb()
+        )
+        return
+
+    username = swap.get("username")
+    username_line = f"@{_esc(username)}" if username else "<i>not set</i>"
+
+    text = (
+        f"🔎 <b>Record for order</b> <code>{_esc(swap['exchange_id'])}</code>\n\n"
+        f"🧾 Internal txn ID: <code>{swap['id']}</code>\n"
+        f"👤 Telegram user ID: <code>{swap['user_id']}</code>\n"
+        f"🔗 Username: {username_line}\n"
+        f"🌐 Language: <code>{_esc(swap.get('language_code')) or '—'}</code>\n\n"
+        f"🔄 {_esc(swap['currency_from']).upper()} → {_esc(swap['currency_to']).upper()}\n"
+        f"💰 {_esc(swap['amount_from'])} → {_esc(swap['amount_to'])}\n"
+        f"📊 Status: <b>{_esc(swap['status'])}</b>\n"
+        f"🕒 Created: <code>{_esc(swap['created_at'])}</code>"
+    )
+    await message.answer(
+        text,
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="👤 Manage this user",
+                                  callback_data=f"admin_manage_{swap['user_id']}")],
+            [InlineKeyboardButton(text="⬅️ Back", callback_data="adm_back")],
+        ])
+    )
+
+
+# ── Admin access audit log ───────────────────────────────────────────────────────
+
+@router.callback_query(F.data == "adm_access_log")
+async def cb_access_log(callback: CallbackQuery):
+    if not is_admin(callback.from_user.id):
+        return
+    await callback.answer()
+    entries = await get_admin_access_log(30)
+    if not entries:
+        await callback.message.edit_text(
+            "🛡 <b>Admin access log</b>\n\nNo entries yet.",
+            reply_markup=admin_back_kb()
+        )
+        return
+    text = "🛡 <b>Admin access log</b> (last 30)\n\n"
+    for e in entries:
+        text += (
+            f"<code>{str(e['created_at'])[:19]}</code> | "
+            f"admin <code>{e['admin_id']}</code> | "
+            f"{_esc(e['action'])}"
+        )
+        if e.get("target"):
+            text += f" → <code>{_esc(e['target'])}</code>"
+        text += "\n"
+    await callback.message.edit_text(text[:3900], reply_markup=admin_back_kb())
 
 
 # Block

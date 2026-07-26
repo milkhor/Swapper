@@ -5,10 +5,13 @@ def main_menu(lang: str = "en") -> InlineKeyboardMarkup:
     from services.i18n import t
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=t(lang, "btn_swap"),     callback_data="action_swap")],
-        [InlineKeyboardButton(text=t(lang, "btn_buy_card"), callback_data="action_fiat")],
+        # "Buy with card" (fiat) hidden — FixedFloat is crypto-only. The flow
+        # (handlers/buywithcard.py, still on SimpleSwap) stays in code, just unlinked.
+        # [InlineKeyboardButton(text=t(lang, "btn_buy_card"), callback_data="action_fiat")],
         [InlineKeyboardButton(text="📜 My History",         callback_data="action_history")],
         [InlineKeyboardButton(text=t(lang, "btn_how"),      callback_data="action_how")],
         [InlineKeyboardButton(text="📊 Prices", callback_data="action_prices")],
+        [InlineKeyboardButton(text="🔒 Privacy", callback_data="action_privacy")],
         [InlineKeyboardButton(text=t(lang, "btn_language"), callback_data="action_language")],
     ])
 
@@ -17,6 +20,51 @@ def back_to_menu(lang: str = "en") -> InlineKeyboardMarkup:
     from services.i18n import t
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=t(lang, "btn_back"), callback_data="action_back")]
+    ])
+
+
+def cancel_keyboard(lang: str = "en") -> InlineKeyboardMarkup:
+    from services.i18n import t
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=t(lang, "btn_back"), callback_data="action_back")]
+    ])
+
+
+def exchange_cancel_keyboard(lang: str = "en") -> InlineKeyboardMarkup:
+    """Back button for the swap flow — goes to previous step, not main menu."""
+    from services.i18n import t
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=t(lang, "btn_back"), callback_data="swap_back")]
+    ])
+
+
+def amount_mode_keyboard(lang: str = "en") -> InlineKeyboardMarkup:
+    from services.i18n import t
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="💰 I want to send", callback_data="mode_send")],
+        [InlineKeyboardButton(text="💎 I want to receive", callback_data="mode_receive")],
+        [InlineKeyboardButton(text=t(lang, "btn_back"), callback_data="swap_back")],
+    ])
+
+
+def confirm_keyboard(lang: str = "en") -> InlineKeyboardMarkup:
+    from services.i18n import t
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text=t(lang, "btn_confirm"), callback_data="confirm_yes"),
+            InlineKeyboardButton(text=t(lang, "btn_cancel"),  callback_data="confirm_no"),
+        ],
+        [InlineKeyboardButton(text=t(lang, "btn_back"), callback_data="swap_back")],
+    ])
+
+
+def fiat_confirm_keyboard(lang: str = "en") -> InlineKeyboardMarkup:
+    from services.i18n import t
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text=t(lang, "btn_confirm"), callback_data="fiat_confirm_yes"),
+            InlineKeyboardButton(text=t(lang, "btn_cancel"),  callback_data="fiat_confirm_no"),
+        ]
     ])
 
 
@@ -38,7 +86,6 @@ def payment_details_keyboard(exchange_id: str,
 def active_orders_keyboard(swaps: list, lang: str = "en") -> InlineKeyboardMarkup:
     from services.i18n import t
     from services.order_details import is_payment_active
-
     buttons = []
     for swap in swaps:
         if not is_payment_active(swap.get("status")):
@@ -53,39 +100,11 @@ def active_orders_keyboard(swaps: list, lang: str = "en") -> InlineKeyboardMarku
                 callback_data=f"view_payment_{exchange_id}"
             )
         ])
-
     buttons.append([InlineKeyboardButton(text=t(lang, "btn_back"), callback_data="action_back")])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
-def cancel_keyboard(lang: str = "en") -> InlineKeyboardMarkup:
-    from services.i18n import t
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=t(lang, "btn_back"), callback_data="action_back")]
-    ])
-
-
-def confirm_keyboard(lang: str = "en") -> InlineKeyboardMarkup:
-    from services.i18n import t
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [
-            InlineKeyboardButton(text=t(lang, "btn_confirm"), callback_data="confirm_yes"),
-            InlineKeyboardButton(text=t(lang, "btn_cancel"),  callback_data="confirm_no"),
-        ]
-    ])
-
-
-def fiat_confirm_keyboard(lang: str = "en") -> InlineKeyboardMarkup:
-    from services.i18n import t
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [
-            InlineKeyboardButton(text=t(lang, "btn_confirm"), callback_data="fiat_confirm_yes"),
-            InlineKeyboardButton(text=t(lang, "btn_cancel"),  callback_data="fiat_confirm_no"),
-        ]
-    ])
-    
 def admin_back_kb():
-    """Кнопка возврата в админ-панель"""
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="⬅️ Back to Admin", callback_data="admin_main")]
     ])
@@ -137,7 +156,6 @@ async def crypto_to_keyboard(lang: str = "en",
         buttons.append(row)
     buttons.append([InlineKeyboardButton(text=t(lang, "btn_back"), callback_data="action_back")])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
-
 
 
 async def fiat_keyboard(lang: str = "en") -> InlineKeyboardMarkup:

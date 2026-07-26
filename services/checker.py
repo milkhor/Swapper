@@ -3,7 +3,7 @@ import logging
 from aiogram import Bot
 
 from database.db import get_active_swaps, update_swap_status, update_swap_payment_details
-from services.simpleswap import get_exchange
+from services.fixedfloat import get_exchange
 from services.order_details import extract_payment_details
 from config import PUBLIC_CHANNEL_ID, PRIVATE_CHANNEL_ID # Добавили импорты
 
@@ -12,14 +12,14 @@ logger = logging.getLogger(__name__)
 CHECK_INTERVAL = 180  # 3 минуты
 
 STATUS_MESSAGES = {
-    "waiting":    "⏳ Ожидаем входящую транзакцию...",
-    "confirming": "🔄 Транзакция найдена, ждём подтверждения сети...",
-    "exchanging": "💱 Обмен выполняется...",
-    "sending":    "📤 Отправляем на твой кошелёк...",
-    "finished":   "✅ Обмен завершён! Монеты отправлены на кошелёк.",
-    "failed":     "❌ Обмен не удался. Напиши /start чтобы попробовать снова.",
-    "refunded":   "↩️ Средства возвращены на исходный адрес.",
-    "expired":    "⌛ Время обмена истекло. Напиши /start чтобы создать новый.",
+    "waiting":    "⏳ Waiting for incoming transaction...",
+    "confirming": "🔄 Transaction found, waiting for network confirmation...",
+    "exchanging": "💱 Exchange in progress...",
+    "sending":    "📤 Sending to your wallet...",
+    "finished":   "✅ Exchange completed! Coins sent to your wallet.",
+    "failed":     "❌ Exchange failed. Type /start to try again.",
+    "refunded":   "↩️ Funds returned to the source address.",
+    "expired":    "⌛ Exchange expired. Type /start to create a new one.",
 }
 
 NOTIFY_ON = {"confirming", "exchanging", "sending", "finished", "failed", "refunded", "expired"}
@@ -36,7 +36,7 @@ async def check_swaps(bot: Bot):
 
             for swap in swaps:
                 try:
-                    result = await get_exchange(swap["exchange_id"])
+                    result = await get_exchange(swap["exchange_id"], swap.get("order_token"))
                     if not result:
                         continue
 
@@ -59,7 +59,7 @@ async def check_swaps(bot: Bot):
                     if PRIVATE_CHANNEL_ID:
                         try:
                             await bot.send_message(
-                                PRIVATE_CHANNEL_ID,
+                                int(PRIVATE_CHANNEL_ID),
                                 f"🔔 <b>Status Update</b>\n"
                                 f"ID: <code>{swap['exchange_id']}</code>\n"
                                 f"User: <code>{swap['user_id']}</code>\n"
@@ -74,7 +74,7 @@ async def check_swaps(bot: Bot):
                             cur_from = swap['currency_from'].split('_')[0].upper()
                             cur_to = swap['currency_to'].split('_')[0].upper()
                             await bot.send_message(
-                                PUBLIC_CHANNEL_ID,
+                                int(PUBLIC_CHANNEL_ID),
                                 f"✅ <b>Successful Exchange!</b>\n\n"
                                 f"🔄 {cur_from} ➡️ {cur_to}\n"
                                 f"💰 Amount: <b>{swap['amount_from']} {cur_from}</b>\n"
@@ -90,10 +90,10 @@ async def check_swaps(bot: Bot):
                             amount_to = result.get("amountTo") or swap.get("amount_to", "")
                             ticker_to = (result.get("tickerTo") or swap.get("currency_to", "")).split('_')[0]
                             text = (
-                                f"✅ <b>Обмен завершён!</b>\n\n"
+                                f"✅ <b>Exchange completed!</b>\n\n"
                                 f"ID: <code>{swap['exchange_id']}</code>\n"
-                                f"Получено: <b>{amount_to} {ticker_to.upper()}</b>\n\n"
-                                f"Спасибо, что воспользовался ботом 🙌"
+                                f"Received: <b>{amount_to} {ticker_to.upper()}</b>\n\n"
+                                f"Thank you for using our bot! 🙌"
                             )
                         else:
                             text = (

@@ -1,6 +1,6 @@
 import re
 
-from services import simpleswap
+from services import fixedfloat
 
 
 EVM_NETWORKS = {
@@ -78,7 +78,7 @@ async def validate_wallet_address(
             pass
         return False, _invalid_message(label, network)
 
-    api_pattern = await simpleswap.get_address_validation_pattern(ticker, network)
+    api_pattern = await fixedfloat.get_address_validation_pattern(ticker, network)
     if api_pattern:
         try:
             if re.fullmatch(_clean_api_pattern(api_pattern), address):
