@@ -38,11 +38,27 @@ Railway's container filesystem is **ephemeral**. Without a volume the SQLite
 database is wiped on each redeploy — which loses all order records and breaks the
 ≥1-year retention requirement.
 
-1. Railway → your service → **Volumes** → **New Volume**.
-2. Mount path: `/data`.
-3. Set `DB_PATH=/data/swaps.db` (step 1).
-4. (Optional) To carry over existing records, upload the current `swaps.db` into
-   the volume once (Railway shell / `railway run`).
+**Volumes are not in the Variables tab** — they are a separate object attached to
+the service. Any of these work:
+
+- Command palette: **Cmd/Ctrl + K** → type `volume` → *Create Volume* → pick the
+  service to attach it to.
+- Right-click empty space on the project canvas → **Volume**.
+- Service card → **Settings** tab → *Volumes* section.
+
+Set the **mount path** to `/data`.
+
+Once attached, Railway injects `RAILWAY_VOLUME_MOUNT_PATH` automatically and the
+bot stores the DB there — **no `DB_PATH` variable needed**. Set `DB_PATH`
+explicitly only if you want a different location.
+
+To carry over existing records, upload the old `swaps.db` into the volume once
+(Railway shell / `railway run`) before the first boot.
+
+**Verify it worked:** the startup log prints `Using database at …`. If it warns
+`No DB_PATH or Railway volume configured — the database is EPHEMERAL`, the volume
+is not attached. Also, on a second redeploy you should *not* see
+`Default currencies seeded` — that line means the database was empty.
 
 ## 3. Deploy
 
