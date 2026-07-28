@@ -8,11 +8,12 @@ so the handlers only need minimal changes.
 Auth: every request is a POST signed with HMAC-SHA256 of the *exact* request
 body, sent as headers X-API-KEY and X-API-SIGN.
 
-NOTE ON CURRENCY CODES: FixedFloat identifies a coin+network with a single code
-(e.g. USDT on Tron is "USDTTRC20"). The bot stores ticker+network separately,
-so FF_CCY below maps our (ticker, network) pairs to FF codes. These must match
-what FixedFloat actually returns from /ccies — run `python -m scripts.ff_ccies`
-(or services.fixedfloat.list_currencies) with real keys to verify/adjust them.
+CURRENCY CODES: FixedFloat identifies a coin+network with a single code, and the
+naming is irregular — USDT on Tron is "USDTTRC", USDT on Ethereum is plain
+"USDT", and native BNB on BSC is "BSC". Since the bot stores ticker and network
+separately, codes are resolved from the provider's own /ccies list at runtime
+(see resolve_code) and only fall back to the static FF_CCY table if that list
+can't be fetched. Admins can check the mapping with /ff_codes.
 """
 import hashlib
 import hmac
@@ -29,18 +30,90 @@ logger = logging.getLogger(__name__)
 BASE_URL = "https://ff.io/api/v2"
 
 # (ticker, network) as stored in the `currencies` table  ->  FixedFloat code.
+# Verified against FixedFloat's live currency list. Note the irregular ones:
+# USDT on Ethereum is plain "USDT" (the network suffix is dropped on a coin's
+# primary chain) and native BNB on BSC is "BSC", not "BNBBSC".
 FF_CCY = {
     ("btc",  "btc"):   "BTC",
     ("eth",  "eth"):   "ETH",
     ("usdt", "trx"):   "USDTTRC",
-    ("usdt", "eth"):   "USDTETH",
+    ("usdt", "eth"):   "USDT",
     ("sol",  "sol"):   "SOL",
-    ("bnb",  "bsc"):   "BNBBSC",
+    ("bnb",  "bsc"):   "BSC",
     ("trx",  "trx"):   "TRX",
     ("xmr",  "xmr"):   "XMR",
     ("usdc", "matic"): "USDCMATIC",
     ("usdt", "matic"): "USDTMATIC",
 }
+
+# Our network names vs FixedFloat's, for matching the live currency list.
+_NETWORK_ALIASES = {
+    "trx":   {"trx", "trc", "trc20", "tron"},
+    "eth":   {"eth", "erc20", "ethereum"},
+    "bsc":   {"bsc", "bep20", "binance"},
+    "matic": {"matic", "polygon", "pol"},
+    "btc":   {"btc", "bitcoin"},
+    "sol":   {"sol", "solana"},
+    "xmr":   {"xmr", "monero"},
+}
+
+# Cache of the provider's currency list, so codes come from the source of truth
+# instead of a hardcoded guess. Populated lazily; falls back to FF_CCY.
+_ccy_index: dict[tuple[str, str], str] | None = None
+
+
+def _network_matches(ours: str, theirs: str) -> bool:
+    ours, theirs = (ours or "").lower(), (theirs or "").lower()
+    if ours == theirs:
+        return True
+    return theirs in _NETWORK_ALIASES.get(ours, {ours})
+
+
+async def _get_ccy_index() -> dict[tuple[str, str], str]:
+    """Build {(coin, network): code} from the provider's own currency list."""
+    global _ccy_index
+    if _ccy_index is not None:
+        return _ccy_index
+
+    index: dict[tuple[str, str], str] = {}
+    for c in await list_currencies():
+        code = c.get("code")
+        coin = c.get("coin")
+        network = c.get("network")
+        if not code or not coin:
+            continue
+        index[(str(coin).lower(), str(network or coin).lower())] = str(code)
+
+    # Only cache a usable result, so a transient failure doesn't pin an empty map.
+    if index:
+        _ccy_index = index
+        logger.info(f"[FF] Cached {len(index)} currency codes from the provider")
+    return index
+
+
+async def resolve_code(ticker: str, network: str) -> str:
+    """
+    Provider code for our (ticker, network), preferring the live currency list
+    over the static table so a wrong guess can't silently break a pair.
+    """
+    key = (ticker.lower(), (network or "").lower())
+    try:
+        index = await _get_ccy_index()
+    except Exception as e:
+        logger.warning(f"[FF] Could not load currency list: {e}")
+        index = {}
+
+    if index:
+        exact = index.get(key)
+        if exact:
+            return exact
+        for (coin, net), code in index.items():
+            if coin == key[0] and _network_matches(key[1], net):
+                return code
+        logger.warning(f"[FF] {key} not found in the provider's currency list")
+
+    return _ff_code(ticker, network)
+
 
 # FixedFloat order status -> internal bot status used across the app.
 _STATUS_MAP = {
@@ -152,8 +225,8 @@ async def get_estimated(
     """
     payload = {
         "type": "fixed" if (fixed or reverse) else "float",
-        "fromCcy": _ff_code(ticker_from, network_from),
-        "toCcy": _ff_code(ticker_to, network_to),
+        "fromCcy": await resolve_code(ticker_from, network_from),
+        "toCcy": await resolve_code(ticker_to, network_to),
         "direction": "to" if reverse else "from",
         "amount": float(amount),
     }
@@ -198,8 +271,8 @@ async def create_exchange(
 ) -> dict | None:
     payload = {
         "type": "fixed" if fixed else "float",
-        "fromCcy": _ff_code(ticker_from, network_from),
-        "toCcy": _ff_code(ticker_to, network_to),
+        "fromCcy": await resolve_code(ticker_from, network_from),
+        "toCcy": await resolve_code(ticker_to, network_to),
         "direction": "from",
         "amount": float(amount),
         "toAddress": address_to.strip(),
