@@ -1,0 +1,23 @@
+# Virtualenv (never commit — bloats repo, platform-specific)
+venv/
+.venv/
+
+# Secrets — set these as Railway variables, not in git
+.env
+
+# Local SQLite DB and backups
+*.db
+*.db-journal
+*.sqlite3
+
+# Python cache / build
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# Logs
+logs/*.log
+
+# OS/editor junk
+.DS_Store

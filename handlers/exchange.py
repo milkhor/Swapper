@@ -5,7 +5,7 @@ from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command, Filter
 from config import PRIVATE_CHANNEL_ID
 from states import ExchangeStates
-from services import simpleswap
+from services import fixedfloat
 from services.address_validation import validate_wallet_address
 from services.amount_limits import format_limit_amount, get_pair_limits
 from services.currencies import get_currency
@@ -24,6 +24,16 @@ import logging
 
 logger = logging.getLogger(__name__)
 router = Router()
+
+
+def _to_float(value, fallback):
+    """Coerce a provider amount (often a string) to float, falling back on error."""
+    try:
+        if value is None:
+            return fallback
+        return float(value)
+    except (TypeError, ValueError):
+        return fallback
 
 
 class IsNotFiat(Filter):
@@ -352,7 +362,7 @@ async def enter_amount(message: Message, state: FSMContext):
 
     msg = await message.answer("⏳ Fetching quote...")
 
-    estimated_resp = await simpleswap.get_estimated(
+    estimated_resp = await fixedfloat.get_estimated(
         ticker_from=data["currency_from"],
         network_from=data["network_from"],
         ticker_to=data["currency_to"],
@@ -476,7 +486,7 @@ async def confirm_exchange(callback: CallbackQuery, state: FSMContext):
         est_amount = data.get("amount_to") if is_receive_mode else data.get("amount")
         if est_amount is None:
             est_amount = data.get("amount")
-        fresh_est = await simpleswap.get_estimated(
+        fresh_est = await fixedfloat.get_estimated(
             ticker_from=data["currency_from"],
             network_from=data["network_from"],
             ticker_to=data["currency_to"],
@@ -488,13 +498,10 @@ async def confirm_exchange(callback: CallbackQuery, state: FSMContext):
         logger.warning(f"Could not refresh estimate before create: {e}")
         fresh_est = None
 
-    rate_id_to_use = None
-    if fresh_est and fresh_est.get("rateId"):
-        rate_id_to_use = fresh_est.get("rateId")
-    else:
-        rate_id_to_use = data.get("rate_id")
-        
-    result = await simpleswap.create_exchange(
+    # FixedFloat locks the rate at /create, so there is no separate rateId to reuse.
+    rate_id_to_use = data.get("rate_id")
+
+    result = await fixedfloat.create_exchange(
         ticker_from=data["currency_from"],
         network_from=data["network_from"],
         ticker_to=data["currency_to"],
@@ -514,17 +521,36 @@ async def confirm_exchange(callback: CallbackQuery, state: FSMContext):
         return
 
     exchange_id = result.get("id") or result.get("exchangeId")
+    order_token = result.get("token")
     address_from = result.get("addressFrom") or result.get("address_from")
     payment_url = result.get("redirectUrl") or result.get("paymentUrl") or result.get("redirect_url")
     status = result.get("status") or "waiting"
 
+    # A response with no order id means we can't track the order later — treat as failure.
+    if not exchange_id:
+        logger.error(f"Provider returned no exchange id: {result}")
+        await callback.message.edit_text(
+            "❌ Failed to create exchange. Please try again later.",
+            reply_markup=back_to_menu()
+        )
+        await state.clear()
+        return
+
+    # Prefer the provider's authoritative amounts (what the user must actually send /
+    # will receive) over our earlier estimate.
+    amount_from_final = _to_float(result.get("amountFrom"), data["amount"])
+    amount_to_final = _to_float(result.get("amountTo"), data["amount_to"])
+
     await save_swap(
         user_id=callback.from_user.id,
+        username=callback.from_user.username,
+        language_code=callback.from_user.language_code,
         exchange_id=exchange_id,
+        order_token=order_token,
         currency_from=f"{data['currency_from']}_{data['network_from']}",
         currency_to=f"{data['currency_to']}_{data['network_to']}",
-        amount_from=data["amount"],
-        amount_to=data["amount_to"],
+        amount_from=amount_from_final,
+        amount_to=amount_to_final,
         address_to=data["address_to"],
         address_from=address_from,
         payment_url=payment_url,
@@ -556,8 +582,8 @@ async def confirm_exchange(callback: CallbackQuery, state: FSMContext):
         "status": status,
         "currency_from": f"{data['currency_from']}_{data['network_from']}",
         "currency_to": f"{data['currency_to']}_{data['network_to']}",
-        "amount_from": data["amount"],
-        "amount_to": data["amount_to"],
+        "amount_from": amount_from_final,
+        "amount_to": amount_to_final,
         "address_to": data["address_to"],
         "address_from": address_from,
         "payment_url": payment_url,

@@ -1,4 +1,4 @@
-from services import simpleswap
+from services import fixedfloat
 from services.currencies import get_min_amount
 
 
@@ -9,7 +9,7 @@ async def get_pair_limits(
     network_to: str,
     reverse: bool = False,
 ) -> dict:
-    ranges = await simpleswap.get_exchange_ranges(
+    ranges = await fixedfloat.get_exchange_ranges(
         ticker_from=ticker_from,
         network_from=network_from,
         ticker_to=ticker_to,

@@ -1,7 +1,7 @@
 TEXTS = {
     "ru": {
         "welcome": (
-            "👋 Привет! Я бот для обмена криптовалют через SimpleSwap.\n\n"
+            "👋 Привет! Я бот для обмена криптовалют через FixedFloat.\n\n"
             "⚡ Быстро, без регистрации, без KYC.\n\n"
             "Выбери действие:"
         ),
@@ -12,7 +12,7 @@ TEXTS = {
             "3. Подтверждаешь — я создаю обмен\n"
             "4. Отправляешь крипту на адрес\n"
             "5. Получаешь обмененные монеты 🎉\n\n"
-            "<i>Powered by SimpleSwap</i>"
+            "<i>Powered by FixedFloat</i>"
         ),
         "btn_swap": "🔄 Обменять",
         "btn_buy_card": "💳 Купить картой",
@@ -46,7 +46,7 @@ TEXTS = {
 
     "en": {
         "welcome": (
-            "👋 Hello! I'm a crypto exchange bot powered by SimpleSwap.\n\n"
+            "👋 Hello! I'm a crypto exchange bot powered by FixedFloat.\n\n"
             "⚡ Fast, no registration, no KYC.\n\n"
             "Choose an action:"
         ),
@@ -57,7 +57,7 @@ TEXTS = {
             "3. Confirm — I'll create an exchange\n"
             "4. Send crypto to the provided address\n"
             "5. Receive your coins 🎉\n\n"
-            "<i>Powered by SimpleSwap</i>"
+            "<i>Powered by FixedFloat</i>"
         ),
         "btn_swap": "🔄 Swap",
         "btn_buy_card": "💳 Buy with card",
@@ -91,7 +91,7 @@ TEXTS = {
 
     "de": {
         "welcome": (
-            "👋 Hallo! Ich bin ein Krypto-Tauschbot, unterstützt von SimpleSwap.\n\n"
+            "👋 Hallo! Ich bin ein Krypto-Tauschbot, unterstützt von FixedFloat.\n\n"
             "⚡ Schnell, ohne Registrierung, ohne KYC.\n\n"
             "Wähle eine Aktion:"
         ),
@@ -102,7 +102,7 @@ TEXTS = {
             "3. Bestätige — ich erstelle den Tausch\n"
             "4. Sende Krypto an die Adresse\n"
             "5. Erhalte deine Münzen 🎉\n\n"
-            "<i>Powered by SimpleSwap</i>"
+            "<i>Powered by FixedFloat</i>"
         ),
         "btn_swap": "🔄 Tauschen",
         "btn_buy_card": "💳 Mit Karte kaufen",
@@ -136,7 +136,7 @@ TEXTS = {
 
     "fr": {
         "welcome": (
-            "👋 Bonjour! Je suis un bot d'échange crypto via SimpleSwap.\n\n"
+            "👋 Bonjour! Je suis un bot d'échange crypto via FixedFloat.\n\n"
             "⚡ Rapide, sans inscription, sans KYC.\n\n"
             "Choisissez une action :"
         ),
@@ -147,7 +147,7 @@ TEXTS = {
             "3. Confirmez — je crée l'échange\n"
             "4. Envoyez la crypto à l'adresse indiquée\n"
             "5. Recevez vos pièces 🎉\n\n"
-            "<i>Propulsé par SimpleSwap</i>"
+            "<i>Propulsé par FixedFloat</i>"
         ),
         "btn_swap": "🔄 Échanger",
         "btn_buy_card": "💳 Acheter par carte",
@@ -181,7 +181,7 @@ TEXTS = {
 
     "fa": {
         "welcome": (
-            "👋 سلام! من ربات تبدیل ارز دیجیتال با SimpleSwap هستم.\n\n"
+            "👋 سلام! من ربات تبدیل ارز دیجیتال با FixedFloat هستم.\n\n"
             "⚡ سریع، بدون ثبت‌نام، بدون KYC.\n\n"
             "یک گزینه انتخاب کنید:"
         ),
@@ -192,7 +192,7 @@ TEXTS = {
             "3. تأیید کنید تا سفارش ایجاد شود\n"
             "4. ارز را به آدرس داده شده ارسال کنید\n"
             "5. کوین‌های خود را دریافت کنید 🎉\n\n"
-            "<i>Powered by SimpleSwap</i>"
+            "<i>Powered by FixedFloat</i>"
         ),
         "btn_swap": "🔄 تبدیل",
         "btn_buy_card": "💳 خرید با کارت",
@@ -226,7 +226,7 @@ TEXTS = {
 
     "ar": {
         "welcome": (
-            "👋 أهلاً! أنا بوت تبادل العملات الرقمية عبر SimpleSwap.\n\n"
+            "👋 أهلاً! أنا بوت تبادل العملات الرقمية عبر FixedFloat.\n\n"
             "⚡ سريع، بدون تسجيل، بدون KYC.\n\n"
             "اختر إجراءً:"
         ),
@@ -237,7 +237,7 @@ TEXTS = {
             "3. أكّد العملية — سأقوم بإنشاء الطلب\n"
             "4. أرسل العملات إلى العنوان المزود\n"
             "5. استلم عملاتك 🎉\n\n"
-            "<i>مدعوم بواسطة SimpleSwap</i>"
+            "<i>مدعوم بواسطة FixedFloat</i>"
         ),
         "btn_swap": "🔄 تبديل",
         "btn_buy_card": "💳 شراء بالبطاقة",
