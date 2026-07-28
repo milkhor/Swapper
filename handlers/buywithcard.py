@@ -6,7 +6,7 @@ from aiogram.filters import Command
 
 from config import PRIVATE_CHANNEL_ID
 from states import ExchangeStates
-from services import simpleswap
+from services import simpleswap, providers
 from services.currencies import get_fiat_currencies, get_crypto_currencies, get_currency, get_min_amount
 from services.limiter import limiter
 from database.db import save_swap, is_user_blocked
@@ -230,6 +230,7 @@ async def confirm_fiat_exchange(callback: CallbackQuery, state: FSMContext):
         username=callback.from_user.username,
         language_code=callback.from_user.language_code,
         exchange_id=exchange_id,
+        provider=providers.SIMPLESWAP,
         currency_from=f"{data['currency_from']}_{data['network_from']}",
         currency_to=f"{data['currency_to']}_{data['network_to']}",
         amount_from=data["amount"],

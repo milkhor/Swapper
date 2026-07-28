@@ -7,7 +7,7 @@ from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command, Filter
 from config import PRIVATE_CHANNEL_ID
 from states import ExchangeStates
-from services import fixedfloat
+from services import fixedfloat, providers
 from services.address_validation import validate_wallet_address
 from services.amount_limits import format_limit_amount, get_pair_limits
 from services.currencies import get_currency
@@ -539,6 +539,7 @@ async def confirm_exchange(callback: CallbackQuery, state: FSMContext):
         language_code=callback.from_user.language_code,
         exchange_id=exchange_id,
         order_token=order_token,
+        provider=providers.FIXEDFLOAT,
         currency_from=f"{data['currency_from']}_{data['network_from']}",
         currency_to=f"{data['currency_to']}_{data['network_to']}",
         amount_from=amount_from_final,

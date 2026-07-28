@@ -225,3 +225,103 @@ async def test_every_request_is_signed(fake_ff):
         body = json.dumps(payload)
         expected = hmac.new(b"test-secret", body.encode(), hashlib.sha256).hexdigest()
         assert ff._sign(body) == expected
+
+
+# ── Admin-added currencies ──────────────────────────────────────────────────
+
+async def test_admin_added_crypto_currency_works_without_code_changes(fake_ff, fresh_db):
+    """
+    A currency added from the admin panel must be usable immediately: the code
+    comes from the provider's list, so no redeploy is needed for anything
+    FixedFloat already supports.
+    """
+    # XMR is NOT in the static FF_CCY-only path we rely on for unknown pairs.
+    cur_id = await fresh_db.add_currency(
+        ticker="xmr", network="xmr", label="XMR", min_amount=0.1, is_fiat=False
+    )
+    assert cur_id
+
+    listed = await fresh_db.get_currencies(crypto_only=True, active_only=True)
+    assert any(c["ticker"] == "xmr" and c["network"] == "xmr" for c in listed)
+
+    # Resolves through the live provider list and quotes successfully.
+    assert await ff.resolve_code("xmr", "xmr") == "XMR"
+    quote = await ff.get_estimated("btc", "btc", "xmr", "xmr", "0.01")
+    assert quote and "error" not in quote
+
+
+async def test_admin_added_currency_unknown_to_provider_is_reported(fake_ff, fresh_db):
+    """An unsupported currency must fail loudly at quote time, not silently."""
+    await fresh_db.add_currency(
+        ticker="fake", network="fake", label="FAKE", min_amount=1.0, is_fiat=False
+    )
+    quote = await ff.get_estimated("btc", "btc", "fake", "fake", "0.01")
+    assert quote == {"error": "toCcy is incorrect"}
+
+
+async def test_admin_toggle_and_min_edit_apply(fresh_db):
+    """Disabling a currency hides it; editing its minimum takes effect."""
+    cur_id = await fresh_db.add_currency("ltc", "ltc", "LTC", 0.05, False)
+
+    await fresh_db.update_currency_min(cur_id, 0.25)
+    rows = await fresh_db.get_all_currencies_admin()
+    assert next(c["min_amount"] for c in rows if c["id"] == cur_id) == 0.25
+
+    await fresh_db.toggle_currency(cur_id)  # disable
+    active = await fresh_db.get_currencies(crypto_only=True, active_only=True)
+    assert all(c["id"] != cur_id for c in active)
+
+
+# ── Provider split: crypto -> FixedFloat, fiat -> SimpleSwap ────────────────
+
+async def test_orders_are_routed_back_to_their_own_provider(fresh_db, monkeypatch):
+    from services import providers
+
+    calls = []
+
+    async def fake_ff_get(order_id, token):
+        calls.append(("fixedfloat", order_id, token))
+        return {"status": "finished"}
+
+    async def fake_ss_get(public_id):
+        calls.append(("simpleswap", public_id))
+        return {"status": "finished"}
+
+    monkeypatch.setattr(providers.fixedfloat, "get_exchange", fake_ff_get)
+    monkeypatch.setattr(providers.simpleswap, "get_exchange", fake_ss_get)
+
+    crypto = {"exchange_id": "FF1", "order_token": "tok", "provider": "fixedfloat"}
+    fiat = {"exchange_id": "SS1", "order_token": None, "provider": "simpleswap"}
+
+    assert (await providers.fetch_order_status(crypto))["status"] == "finished"
+    assert (await providers.fetch_order_status(fiat))["status"] == "finished"
+    assert calls == [("fixedfloat", "FF1", "tok"), ("simpleswap", "SS1")]
+
+
+async def test_legacy_orders_are_not_sent_to_any_provider(monkeypatch):
+    """Pre-migration rows have neither provider nor token — never poll them."""
+    from services import providers
+
+    async def boom(*a, **k):
+        raise AssertionError("legacy order must not reach a provider")
+
+    monkeypatch.setattr(providers.fixedfloat, "get_exchange", boom)
+    monkeypatch.setattr(providers.simpleswap, "get_exchange", boom)
+
+    legacy = {"exchange_id": "OLD1", "order_token": None, "provider": None}
+    assert await providers.fetch_order_status(legacy) is None
+
+
+async def test_provider_is_persisted_per_order(fresh_db):
+    await fresh_db.save_swap(
+        user_id=1, exchange_id="FF9", order_token="t", provider="fixedfloat",
+        currency_from="btc_btc", currency_to="usdt_trx",
+        amount_from=1.0, amount_to=2.0, address_to="x",
+    )
+    await fresh_db.save_swap(
+        user_id=1, exchange_id="SS9", provider="simpleswap",
+        currency_from="usd_usd", currency_to="btc_btc",
+        amount_from=100.0, amount_to=0.001, address_to="y",
+    )
+    assert (await fresh_db.get_swap_by_exchange_id("FF9"))["provider"] == "fixedfloat"
+    assert (await fresh_db.get_swap_by_exchange_id("SS9"))["provider"] == "simpleswap"

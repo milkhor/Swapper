@@ -3,7 +3,7 @@ import logging
 from aiogram import Bot
 
 from database.db import get_active_swaps, update_swap_status, update_swap_payment_details
-from services.fixedfloat import get_exchange
+from services.providers import fetch_order_status
 from services.order_details import extract_payment_details
 from config import PUBLIC_CHANNEL_ID, PRIVATE_CHANNEL_ID # Добавили импорты
 
@@ -36,12 +36,10 @@ async def check_swaps(bot: Bot):
 
             for swap in swaps:
                 try:
-                    # Orders without a token predate the FixedFloat migration and
-                    # cannot be queried — skip instead of hitting the API each cycle.
-                    if not swap.get("order_token"):
-                        continue
-
-                    result = await get_exchange(swap["exchange_id"], swap["order_token"])
+                    # Routes to whichever provider created the order (FixedFloat for
+                    # crypto swaps, SimpleSwap for card purchases). Returns None for
+                    # pre-migration orders, which are no longer trackable anywhere.
+                    result = await fetch_order_status(swap)
                     if not result:
                         continue
 

@@ -5,9 +5,8 @@ def main_menu(lang: str = "en") -> InlineKeyboardMarkup:
     from services.i18n import t
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=t(lang, "btn_swap"),     callback_data="action_swap")],
-        # "Buy with card" (fiat) hidden — FixedFloat is crypto-only. The flow
-        # (handlers/buywithcard.py, still on SimpleSwap) stays in code, just unlinked.
-        # [InlineKeyboardButton(text=t(lang, "btn_buy_card"), callback_data="action_fiat")],
+        # Fiat -> crypto runs on SimpleSwap: FixedFloat is crypto-only.
+        [InlineKeyboardButton(text=t(lang, "btn_buy_card"), callback_data="action_fiat")],
         [InlineKeyboardButton(text="📜 My History",         callback_data="action_history")],
         [InlineKeyboardButton(text=t(lang, "btn_how"),      callback_data="action_how")],
         [InlineKeyboardButton(text="📊 Prices", callback_data="action_prices")],
