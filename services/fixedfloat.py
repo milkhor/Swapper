@@ -32,8 +32,8 @@ BASE_URL = "https://ff.io/api/v2"
 FF_CCY = {
     ("btc",  "btc"):   "BTC",
     ("eth",  "eth"):   "ETH",
-    ("usdt", "trx"):   "USDTTRC20",
-    ("usdt", "eth"):   "USDTERC20",
+    ("usdt", "trx"):   "USDTTRC",
+    ("usdt", "eth"):   "USDTETH",
     ("sol",  "sol"):   "SOL",
     ("bnb",  "bsc"):   "BNBBSC",
     ("trx",  "trx"):   "TRX",
@@ -77,8 +77,15 @@ def _sign(body: str) -> str:
     ).hexdigest()
 
 
-async def _post(path: str, payload: dict, retries: int = 3) -> dict | None:
-    """POST to FixedFloat, returning the `data` object on success (code == 0)."""
+async def _post(path: str, payload: dict, retries: int = 3) -> tuple[dict | None, str | None]:
+    """
+    POST to FixedFloat. Returns (data, error):
+      success -> (data, None)
+      failure -> (None, reason from the provider or transport)
+
+    The reason is returned rather than stored globally so concurrent requests
+    from different users can never see each other's error.
+    """
     body = json.dumps(payload)
     headers = {
         "X-API-KEY": FIXEDFLOAT_API_KEY,
@@ -96,25 +103,26 @@ async def _post(path: str, payload: dict, retries: int = 3) -> dict | None:
             data = resp.json()
             code = data.get("code")
             if code != 0:
-                logger.error(f"[FF] {path} → code={code} msg={data.get('msg')} ({elapsed}ms)")
-                return None
+                msg = data.get("msg") or f"error code {code}"
+                logger.error(f"[FF] {path} → code={code} msg={msg} ({elapsed}ms) payload={payload}")
+                return None, str(msg)
             logger.info(f"[FF] POST {path} → OK ({elapsed}ms)")
-            return data.get("data")
+            return data.get("data"), None
         except httpx.TimeoutException:
             logger.warning(f"[FF] Timeout attempt {attempt + 1} — {path}")
             if attempt == retries - 1:
                 logger.error(f"[FF] All {retries} attempts timed out: {path}")
-                return None
+                return None, "the exchange provider did not respond"
         except Exception as e:
             logger.error(f"[FF] Request error {path}: {e}")
-            return None
-    return None
+            return None, "could not reach the exchange provider"
+    return None, "could not reach the exchange provider"
 
 
 # ── Currencies (for verifying FF codes) ─────────────────────────────────────────
 
 async def list_currencies() -> list:
-    data = await _post("/ccies", {})
+    data, _ = await _post("/ccies", {})
     if isinstance(data, dict):
         return data.get("ccies") or data.get("data") or []
     if isinstance(data, list):
@@ -137,6 +145,10 @@ async def get_estimated(
     reverse=False: `amount` is what the user sends  → returns estimatedAmountTo.
     reverse=True:  `amount` is what the user wants to receive → also returns
                    estimatedAmountFrom (how much they must send).
+
+    On failure returns {"error": "<reason from the provider>"} so the caller can
+    tell the user *why* (e.g. amount below the minimum) instead of a generic
+    "could not get a quote".
     """
     payload = {
         "type": "fixed" if (fixed or reverse) else "float",
@@ -145,9 +157,9 @@ async def get_estimated(
         "direction": "to" if reverse else "from",
         "amount": float(amount),
     }
-    data = await _post("/price", payload)
+    data, error = await _post("/price", payload)
     if not data:
-        return None
+        return {"error": error} if error else None
     try:
         d_from = data.get("from", {})
         d_to = data.get("to", {})
@@ -192,7 +204,7 @@ async def create_exchange(
         "amount": float(amount),
         "toAddress": address_to.strip(),
     }
-    data = await _post("/create", payload)
+    data, _ = await _post("/create", payload)
     if not data:
         return None
     d_from = data.get("from", {})
@@ -218,7 +230,7 @@ async def get_exchange(order_id: str, token: str | None = None) -> dict | None:
     if not token:
         logger.warning(f"[FF] get_exchange called without token for order {order_id}")
         return None
-    data = await _post("/order", {"id": order_id, "token": token})
+    data, _ = await _post("/order", {"id": order_id, "token": token})
     if not data:
         return None
     d_from = data.get("from", {})

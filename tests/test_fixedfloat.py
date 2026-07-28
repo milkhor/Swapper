@@ -17,9 +17,10 @@ def mock_ff(monkeypatch):
 
     async def fake_post(path, payload, retries=3):
         calls.append((path, payload))
-        return fake_post.response
+        return fake_post.response, fake_post.error
 
     fake_post.response = None
+    fake_post.error = None
     monkeypatch.setattr(ff, "_post", fake_post)
     return fake_post, calls
 
@@ -27,7 +28,7 @@ def mock_ff(monkeypatch):
 # ── Pure helpers ────────────────────────────────────────────────────────────
 
 def test_ff_code_mapping_and_fallback():
-    assert ff._ff_code("usdt", "trx") == "USDTTRC20"
+    assert ff._ff_code("usdt", "trx") == "USDTTRC"   # per FF docs, not USDTTRC20
     assert ff._ff_code("btc", "btc") == "BTC"
     # Unknown pair falls back to bare uppercase ticker.
     assert ff._ff_code("doge", "doge") == "DOGE"
@@ -61,7 +62,7 @@ async def test_get_estimated_forward(mock_ff):
     path, payload = calls[0]
     assert path == "/price"
     assert payload["direction"] == "from"
-    assert payload["fromCcy"] == "BTC" and payload["toCcy"] == "USDTTRC20"
+    assert payload["fromCcy"] == "BTC" and payload["toCcy"] == "USDTTRC"
 
 
 async def test_get_estimated_reverse_returns_send_amount(mock_ff):
@@ -177,7 +178,8 @@ async def test_post_signs_body_and_returns_data(monkeypatch):
     monkeypatch.setattr(ff.httpx, "AsyncClient", _FakeClient)
     _FakeClient.response = {"code": 0, "msg": "OK", "data": {"hello": "world"}}
 
-    data = await ff._post("/price", {"amount": 1})
+    data, err = await ff._post("/price", {"amount": 1})
+    assert err is None
     assert data == {"hello": "world"}
     sent = _FakeClient.last
     assert sent["headers"]["X-API-KEY"] == "key123"
@@ -189,4 +191,17 @@ async def test_post_signs_body_and_returns_data(monkeypatch):
 async def test_post_returns_none_on_error_code(monkeypatch):
     monkeypatch.setattr(ff.httpx, "AsyncClient", _FakeClient)
     _FakeClient.response = {"code": 301, "msg": "Invalid pair", "data": None}
-    assert await ff._post("/create", {}) is None
+    data, err = await ff._post("/create", {})
+    assert data is None
+    assert "Invalid pair" in err
+
+
+# ── error surfacing ─────────────────────────────────────────────────────────
+
+async def test_get_estimated_returns_provider_reason(mock_ff):
+    """The user must see *why* a quote failed, not a generic message."""
+    fake_post, _ = mock_ff
+    fake_post.response = None
+    fake_post.error = "Amount is less than minimum"
+    res = await ff.get_estimated("btc", "btc", "usdt", "trx", "0.5", reverse=True)
+    assert res == {"error": "Amount is less than minimum"}

@@ -1,3 +1,5 @@
+from html import escape
+
 from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery
 from aiogram.fsm.context import FSMContext
@@ -371,10 +373,17 @@ async def enter_amount(message: Message, state: FSMContext):
         reverse=(mode == "receive"),
     )
 
-    if not estimated_resp:
+    if not estimated_resp or estimated_resp.get("error"):
+        reason = (estimated_resp or {}).get("error")
+        detail = (
+            f"<b>{escape(str(reason))}</b>\n\n"
+            if reason else
+            "This pair may be temporarily unavailable or the amount is outside "
+            "the supported range.\n\n"
+        )
         await msg.edit_text(
             f"❌ <b>Could not get a quote.</b>\n\n"
-            f"This pair may be temporarily unavailable or the amount is outside the supported range. "
+            f"{detail}"
             f"Please try a different amount or check back later.\n"
             f"<i>Type /cancel to abort</i>",
             reply_markup=exchange_cancel_keyboard()
@@ -479,26 +488,9 @@ async def confirm_exchange(callback: CallbackQuery, state: FSMContext):
 
     is_receive_mode = data.get("amount_mode") == "receive"
 
-    # Refresh estimate right before creating the exchange to avoid using an expired rateId
-    try:
-        # For receive mode, `data['amount']` stores the calculated amount to send.
-        # Need to pass the original requested receive amount (amount_to) as `amount` when reverse=True.
-        est_amount = data.get("amount_to") if is_receive_mode else data.get("amount")
-        if est_amount is None:
-            est_amount = data.get("amount")
-        fresh_est = await fixedfloat.get_estimated(
-            ticker_from=data["currency_from"],
-            network_from=data["network_from"],
-            ticker_to=data["currency_to"],
-            network_to=data["network_to"],
-            amount=str(est_amount),
-            reverse=is_receive_mode,
-        )
-    except Exception as e:
-        logger.warning(f"Could not refresh estimate before create: {e}")
-        fresh_est = None
-
-    # FixedFloat locks the rate at /create, so there is no separate rateId to reuse.
+    # No pre-create estimate refresh: FixedFloat quotes the rate as part of
+    # /create, so there is no rateId that could go stale (unlike the previous
+    # provider). The extra call would only burn API rate-limit weight.
     rate_id_to_use = data.get("rate_id")
 
     result = await fixedfloat.create_exchange(

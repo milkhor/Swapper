@@ -670,6 +670,51 @@ async def _show_order_record(message: Message, admin_id: int, order_id: str):
     )
 
 
+# ── FixedFloat currency codes ────────────────────────────────────────────────────
+
+@router.message(Command("ff_codes"))
+async def cmd_ff_codes(message: Message):
+    """
+    Show how our (ticker, network) pairs map to FixedFloat codes and whether
+    FixedFloat actually knows them. Lets the mapping be verified against the
+    live API without shell access.
+    """
+    if not is_admin(message.from_user.id):
+        await message.answer("⛔ No access.")
+        return
+
+    from services.fixedfloat import FF_CCY, list_currencies
+
+    await message.answer("⏳ Fetching currency list from FixedFloat...")
+    ccies = await list_currencies()
+    if not ccies:
+        await message.answer(
+            "❌ Could not fetch the currency list.\n"
+            "Check FIXEDFLOAT_API_KEY / FIXEDFLOAT_API_SECRET and the logs."
+        )
+        return
+
+    known = {str(c.get("code", "")).upper() for c in ccies}
+    lines = [f"🔤 <b>FixedFloat codes</b> ({len(known)} supported)\n"]
+    for (ticker, network), code in sorted(FF_CCY.items()):
+        mark = "✅" if code.upper() in known else "❌"
+        lines.append(f"{mark} {_esc(ticker)}/{_esc(network)} → <code>{_esc(code)}</code>")
+
+    bad = [c for c in FF_CCY.values() if c.upper() not in known]
+    if bad:
+        lines.append("\n⚠️ Codes marked ❌ are rejected by FixedFloat.")
+        # Offer candidates so the mapping can be corrected quickly.
+        for c in bad:
+            stem = c[:4].upper()
+            near = sorted(k for k in known if k.startswith(stem))[:8]
+            if near:
+                lines.append(f"<code>{_esc(c)}</code> → try: {', '.join(near)}")
+
+    text = "\n".join(lines)
+    for chunk in [text[i:i + 3500] for i in range(0, len(text), 3500)]:
+        await message.answer(chunk)
+
+
 # ── Admin access audit log ───────────────────────────────────────────────────────
 
 @router.callback_query(F.data == "adm_access_log")
