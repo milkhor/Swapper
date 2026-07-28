@@ -15,7 +15,7 @@ from services.order_details import (
     format_payment_details,
     is_payment_active,
 )
-from services.fixedfloat import get_exchange
+from services.providers import fetch_order_status
 
 router = Router()
 
@@ -77,7 +77,7 @@ async def view_payment_details(callback: CallbackQuery):
         return
 
     if is_payment_active(swap.get("status")):
-        result = await get_exchange(exchange_id, swap.get("order_token"))
+        result = await fetch_order_status(swap)
         if result:
             status = result.get("status") or swap.get("status")
             address_from, payment_url = extract_payment_details(result)

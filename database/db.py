@@ -56,6 +56,7 @@ async def init_db():
                 language_code TEXT,
                 exchange_id TEXT,
                 order_token TEXT,
+                provider TEXT,
                 currency_from TEXT,
                 currency_to TEXT,
                 amount_from REAL,
@@ -132,6 +133,7 @@ async def init_db():
             ("username", "TEXT"),
             ("language_code", "TEXT"),
             ("order_token", "TEXT"),
+            ("provider", "TEXT"),
         ]
         for col_name, col_type in swap_migrations:
             try:
@@ -319,16 +321,17 @@ async def save_swap(user_id: int, exchange_id: str, currency_from: str,
                     status: str = "waiting",
                     username: str | None = None,
                     language_code: str | None = None,
-                    order_token: str | None = None) -> int:
+                    order_token: str | None = None,
+                    provider: str | None = None) -> int:
     async with aiosqlite.connect(DB_PATH) as db:
         cursor = await db.execute("""
             INSERT INTO swaps
-                (user_id, username, language_code, exchange_id, order_token,
+                (user_id, username, language_code, exchange_id, order_token, provider,
                  currency_from, currency_to,
                  amount_from, amount_to, address_to, address_from,
                  payment_url, status)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (user_id, username, language_code, exchange_id, order_token,
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (user_id, username, language_code, exchange_id, order_token, provider,
               currency_from, currency_to,
               amount_from, amount_to, address_to, address_from,
               payment_url, status))

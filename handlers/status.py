@@ -3,7 +3,7 @@ from aiogram.types import Message
 from aiogram.filters import Command
 from html import escape
 
-from services.fixedfloat import get_exchange
+from services.providers import fetch_order_status
 from database.db import (
     get_user_swaps,
     update_swap_payment_details,
@@ -41,11 +41,11 @@ async def cmd_status(message: Message):
 
     await message.answer("⏳ Checking status...")
 
-    # FixedFloat needs the per-order token, which we only have for our own stored
-    # orders — so look the order up locally first.
+    # Providers need details we only hold for our own stored orders (FixedFloat
+    # requires a per-order token), so look the order up locally first.
     swap = await get_swap_by_exchange_id(exchange_id)
 
-    result = await get_exchange(exchange_id, swap.get("order_token") if swap else None)
+    result = await fetch_order_status(swap) if swap else None
 
     if not result and not swap:
         await message.answer("❌ Exchange not found. Check the ID and try again.")

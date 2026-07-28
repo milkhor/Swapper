@@ -22,6 +22,14 @@ def mock_ff(monkeypatch):
     fake_post.response = None
     fake_post.error = None
     monkeypatch.setattr(ff, "_post", fake_post)
+    # Seed the code cache (provider-style (coin, network) keys) so these tests
+    # exercise a single endpoint instead of also fetching /ccies.
+    monkeypatch.setattr(ff, "_ccy_index", {
+        ("btc", "btc"): "BTC",
+        ("eth", "eth"): "ETH",
+        ("usdt", "trc"): "USDTTRC",
+        ("usdt", "eth"): "USDT",
+    })
     return fake_post, calls
 
 
