@@ -20,8 +20,16 @@ async def get_pair_limits(
         min_amount = ranges["min"]
         source = "api"
     else:
+        # The amount the user types is denominated in the TO currency when they
+        # chose "I want to receive", so the local fallback minimum must come from
+        # that same currency — otherwise we'd show (say) BTC's minimum labelled
+        # as USDT.
+        if reverse:
+            min_ticker, min_network = ticker_to, network_to
+        else:
+            min_ticker, min_network = ticker_from, network_from
         try:
-            local_min = await get_min_amount(ticker_from, network_from)
+            local_min = await get_min_amount(min_ticker, min_network)
         except Exception:
             local_min = 0.0
         min_amount = local_min

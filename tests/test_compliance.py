@@ -202,3 +202,20 @@ async def test_pre_migration_active_orders_are_closed_out(tmp_path, monkeypatch)
     )
     await db.init_db()
     assert (await db.get_swap_by_exchange_id("NEW_ONE"))["status"] == "waiting"
+
+
+# ── Amount limits ───────────────────────────────────────────────────────────
+
+async def test_receive_mode_minimum_uses_the_received_currency(fresh_db):
+    """
+    In "I want to receive" mode the typed amount is in the TO currency, so the
+    fallback minimum must come from that currency — not the one being sent.
+    """
+    from services.amount_limits import get_pair_limits
+
+    # btc min = 0.0001, usdt/trx min = 1.0 (seeded defaults)
+    receive = await get_pair_limits("btc", "btc", "usdt", "trx", reverse=True)
+    assert receive["min"] == 1.0      # USDT's minimum, not BTC's
+
+    send = await get_pair_limits("btc", "btc", "usdt", "trx", reverse=False)
+    assert send["min"] == 0.0001      # BTC's minimum
