@@ -23,6 +23,17 @@ PORT = int(os.getenv("PORT", 8080))
 
 async def on_startup(bot: Bot, dp: Dispatcher):
     await init_db()
+
+    # Make the configured margin visible — a silent 0% is easy to miss.
+    from services.fixedfloat import affiliate_params
+    commission = affiliate_params()
+    if commission:
+        logger.info(
+            f"FixedFloat commission: {commission['afftax']}% "
+            f"(refcode {commission['refcode']})"
+        )
+    else:
+        logger.info("FixedFloat commission: not configured — earning 0 per exchange")
     asyncio.create_task(check_swaps(bot))
 
     if WEBHOOK_HOST:

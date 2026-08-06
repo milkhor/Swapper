@@ -325,3 +325,61 @@ async def test_provider_is_persisted_per_order(fresh_db):
     )
     assert (await fresh_db.get_swap_by_exchange_id("FF9"))["provider"] == "fixedfloat"
     assert (await fresh_db.get_swap_by_exchange_id("SS9"))["provider"] == "simpleswap"
+
+
+# ── Affiliate commission (afftax) ───────────────────────────────────────────
+
+def _set_commission(monkeypatch, afftax, refcode="MYCODE"):
+    monkeypatch.setattr(ff, "FIXEDFLOAT_AFFTAX", afftax)
+    monkeypatch.setattr(ff, "FIXEDFLOAT_REFCODE", refcode)
+
+
+async def test_no_commission_configured_by_default(fake_ff, monkeypatch):
+    """Unset means we send nothing extra — FixedFloat's plain rate."""
+    _set_commission(monkeypatch, "", "")
+    await ff.get_estimated("btc", "btc", "usdt", "trx", "0.01")
+    await ff.create_exchange("btc", "btc", "usdt", "trx", "0.01", "TWallet")
+    for path, payload in fake_ff.requests:
+        assert "afftax" not in payload and "refcode" not in payload
+
+
+async def test_commission_applied_identically_to_quote_and_create(fake_ff, monkeypatch):
+    """
+    The quote and the created order must carry the same commission, otherwise
+    the user is shown one rate and given a worse one.
+    """
+    _set_commission(monkeypatch, "0.5")
+    await ff.get_estimated("btc", "btc", "usdt", "trx", "0.01")
+    await ff.create_exchange("btc", "btc", "usdt", "trx", "0.01", "TWallet")
+
+    price = next(p for path, p in fake_ff.requests if path == "/price")
+    create = next(p for path, p in fake_ff.requests if path == "/create")
+    assert price["afftax"] == 0.5 and price["refcode"] == "MYCODE"
+    assert create["afftax"] == price["afftax"]
+    assert create["refcode"] == price["refcode"]
+
+
+async def test_commission_accepts_comma_decimal(monkeypatch):
+    _set_commission(monkeypatch, "0,75")
+    assert ff.affiliate_params()["afftax"] == 0.75
+
+
+async def test_malformed_commission_is_ignored_not_fatal(fake_ff, monkeypatch):
+    """A bad config value costs margin, it must never break exchanges."""
+    _set_commission(monkeypatch, "half a percent")
+    assert ff.affiliate_params() == {}
+    quote = await ff.get_estimated("btc", "btc", "usdt", "trx", "0.01")
+    assert quote and "error" not in quote
+
+
+async def test_commission_requires_a_refcode(monkeypatch):
+    """FixedFloat needs both — sending afftax alone would be rejected."""
+    _set_commission(monkeypatch, "0.5", refcode="")
+    assert ff.affiliate_params() == {}
+
+
+async def test_zero_or_negative_commission_is_not_sent(monkeypatch):
+    _set_commission(monkeypatch, "0")
+    assert ff.affiliate_params() == {}
+    _set_commission(monkeypatch, "-1")
+    assert ff.affiliate_params() == {}

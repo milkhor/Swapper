@@ -22,6 +22,8 @@ Add / confirm these:
 |---|---|
 | `FIXEDFLOAT_API_KEY` | **New.** From your FixedFloat account. |
 | `FIXEDFLOAT_API_SECRET` | **New.** From your FixedFloat account. |
+| `FIXEDFLOAT_AFFTAX` | Optional. Your margin per exchange, in percent (`0.5` = 0.5%). Empty = you earn nothing. Requires `FIXEDFLOAT_REFCODE`. |
+| `FIXEDFLOAT_REFCODE` | Optional. Your FixedFloat affiliate code. Required for `FIXEDFLOAT_AFFTAX` to take effect. |
 | `DB_PATH` | **New.** Set to a path on a persistent volume, e.g. `/data/swaps.db` (see step 2). |
 | `BOT_TOKEN` | Existing. |
 | `ADMIN_ID` | Existing. Single admin who can access customer records. |
