@@ -23,7 +23,12 @@ import time
 
 import httpx
 
-from config import FIXEDFLOAT_API_KEY, FIXEDFLOAT_API_SECRET
+from config import (
+    FIXEDFLOAT_AFFTAX,
+    FIXEDFLOAT_API_KEY,
+    FIXEDFLOAT_API_SECRET,
+    FIXEDFLOAT_REFCODE,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -142,6 +147,42 @@ def _map_status(ff_status: str | None) -> str:
     return _STATUS_MAP.get(ff_status.upper(), ff_status.lower())
 
 
+def affiliate_params() -> dict:
+    """
+    Our commission on the exchange, as configured in the environment.
+
+    Returned as a dict to merge into a request body, and applied to BOTH /price
+    and /create: quoting without it and creating with it would show the user one
+    rate and give them a worse one.
+
+    A malformed value is ignored rather than allowed to break exchanges — the
+    cost of a bad config is lost margin, not a broken bot.
+    """
+    if not FIXEDFLOAT_AFFTAX:
+        return {}
+
+    try:
+        afftax = float(FIXEDFLOAT_AFFTAX.replace(",", "."))
+    except ValueError:
+        logger.error(
+            f"[FF] FIXEDFLOAT_AFFTAX={FIXEDFLOAT_AFFTAX!r} is not a number — "
+            f"ignoring it (no commission will be charged)"
+        )
+        return {}
+
+    if afftax <= 0:
+        return {}
+
+    if not FIXEDFLOAT_REFCODE:
+        logger.error(
+            "[FF] FIXEDFLOAT_AFFTAX is set but FIXEDFLOAT_REFCODE is empty — "
+            "FixedFloat needs both, so no commission will be charged"
+        )
+        return {}
+
+    return {"afftax": afftax, "refcode": FIXEDFLOAT_REFCODE}
+
+
 def _sign(body: str) -> str:
     return hmac.new(
         FIXEDFLOAT_API_SECRET.encode(),
@@ -229,6 +270,8 @@ async def get_estimated(
         "toCcy": await resolve_code(ticker_to, network_to),
         "direction": "to" if reverse else "from",
         "amount": float(amount),
+        # Must match /create, or the quoted rate won't be the rate they get.
+        **affiliate_params(),
     }
     data, error = await _post("/price", payload)
     if not data:
@@ -276,6 +319,7 @@ async def create_exchange(
         "direction": "from",
         "amount": float(amount),
         "toAddress": address_to.strip(),
+        **affiliate_params(),
     }
     data, _ = await _post("/create", payload)
     if not data:

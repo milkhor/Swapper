@@ -8,6 +8,12 @@ SIMPLESWAP_API_KEY = os.getenv("SIMPLESWAP_API_KEY")  # legacy — still used by
 # FixedFloat (ff.io) — primary crypto exchange provider
 FIXEDFLOAT_API_KEY    = os.getenv("FIXEDFLOAT_API_KEY", "")
 FIXEDFLOAT_API_SECRET = os.getenv("FIXEDFLOAT_API_SECRET", "")
+
+# Our margin on each FixedFloat exchange, as a percentage of the exchange amount
+# (e.g. "0.5" = 0.5%). Requires FIXEDFLOAT_REFCODE. Leave both empty to earn
+# nothing and quote FixedFloat's plain rate — changing these needs no code edit.
+FIXEDFLOAT_AFFTAX     = os.getenv("FIXEDFLOAT_AFFTAX", "").strip()
+FIXEDFLOAT_REFCODE    = os.getenv("FIXEDFLOAT_REFCODE", "").strip()
 ADMIN_ID           = int(os.getenv("ADMIN_ID", "0"))
 
 # Webhook
