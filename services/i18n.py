@@ -46,7 +46,7 @@ TEXTS = {
 
     "en": {
         "welcome": (
-            "👋 Hello! I'm a crypto exchange bot powered by FixedFloat.\n\n"
+            "👋 Hello! I'm a crypto exchange bot.\n\n"
             "⚡ Fast, no registration, no KYC.\n\n"
             "Choose an action:"
         ),
